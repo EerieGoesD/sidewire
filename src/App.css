@@ -1247,22 +1247,23 @@ input:disabled {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  padding: 6px 24px 10px;
+  padding: 10px 24px 12px;
   flex-shrink: 0;
-  border-top: 1px solid rgba(30, 144, 255, 0.16);
-  background: rgba(5, 5, 8, 0.42);
+  border-top: 1px solid rgba(30, 144, 255, 0.12);
+  background: rgba(5, 5, 8, 0.6);
 }
 
 .footer-links {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 8px;
+  font-size: 14px;
   font-family: inherit;
 }
 
 .footer-links span {
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
 }
 
 .footer-links a {
@@ -1271,15 +1272,20 @@ input:disabled {
   cursor: pointer;
   font-weight: 500;
   font-family: inherit;
+  border-bottom: 1px solid transparent;
+}
+
+.footer-links a:hover {
+  border-bottom-color: currentColor;
 }
 
 .footer-links a.link-eerie {
-  color: #5babff;
+  color: #6db3ff;
   font-weight: 600;
 }
 
 .footer-links a.link-eerie:hover {
-  color: #fff;
+  color: #a8d0ff;
 }
 
 .footer-links a.link-coffee {
@@ -1288,48 +1294,49 @@ input:disabled {
 }
 
 .footer-links a.link-coffee:hover {
-  color: #fee680;
+  color: #fde68a;
 }
 
 .footer-links a.link-report,
 .footer-links a.link-feedback,
 .footer-links a.link-feature {
-  color: rgba(255, 255, 255, 0.65);
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .footer-links a.link-report:hover,
 .footer-links a.link-feedback:hover,
 .footer-links a.link-feature:hover {
-  color: #fff;
+  color: #1e90ff;
 }
 
 .footer-links .sep {
-  color: rgba(30, 144, 255, 0.2);
+  color: rgba(30, 144, 255, 0.15);
+  font-size: 12px;
 }
 
 .theme-light .global-footer {
-  border-top-color: rgba(19, 93, 168, 0.18);
-  background: rgba(255, 255, 255, 0.52);
+  border-top-color: rgba(19, 93, 168, 0.12);
+  background: rgba(255, 255, 255, 0.6);
 }
 
 .theme-light .footer-links span {
-  color: rgba(21, 25, 34, 0.5);
+  color: rgba(21, 25, 34, 0.3);
 }
 
 .theme-light .footer-links a.link-report,
 .theme-light .footer-links a.link-feedback,
 .theme-light .footer-links a.link-feature {
-  color: rgba(21, 25, 34, 0.6);
+  color: rgba(21, 25, 34, 0.85);
 }
 
 .theme-light .footer-links a.link-report:hover,
 .theme-light .footer-links a.link-feedback:hover,
 .theme-light .footer-links a.link-feature:hover {
-  color: #151922;
+  color: #135da8;
 }
 
 .theme-light .footer-links .sep {
-  color: rgba(19, 93, 168, 0.18);
+  color: rgba(19, 93, 168, 0.12);
 }
 
 /* ── Save button in top bar ── */
