@@ -1300,7 +1300,7 @@ input:disabled {
 .footer-links a.link-report,
 .footer-links a.link-feedback,
 .footer-links a.link-feature {
-  color: rgba(255, 255, 255, 0.8);
+  color: #d4d4d8;
 }
 
 .footer-links a.link-report:hover,
@@ -1326,7 +1326,7 @@ input:disabled {
 .theme-light .footer-links a.link-report,
 .theme-light .footer-links a.link-feedback,
 .theme-light .footer-links a.link-feature {
-  color: rgba(21, 25, 34, 0.85);
+  color: #3a3f4a;
 }
 
 .theme-light .footer-links a.link-report:hover,
