@@ -1247,7 +1247,7 @@ input:disabled {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  padding: 5px 20px 8px;
+  padding: 6px 24px 10px;
   flex-shrink: 0;
   border-top: 1px solid rgba(30, 144, 255, 0.16);
   background: rgba(5, 5, 8, 0.42);
@@ -1257,22 +1257,25 @@ input:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 13px;
+  font-family: inherit;
 }
 
 .footer-links span {
-  color: rgba(255, 255, 255, 0.42);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .footer-links a {
   text-decoration: none;
   transition: color 0.15s;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 500;
+  font-family: inherit;
 }
 
 .footer-links a.link-eerie {
-  color: #1e90ff;
+  color: #5babff;
+  font-weight: 600;
 }
 
 .footer-links a.link-eerie:hover {
@@ -1281,22 +1284,23 @@ input:disabled {
 
 .footer-links a.link-coffee {
   color: #facc15;
+  font-weight: 600;
 }
 
 .footer-links a.link-coffee:hover {
-  color: #f0d060;
+  color: #fee680;
 }
 
 .footer-links a.link-report,
 .footer-links a.link-feedback,
 .footer-links a.link-feature {
-  color: rgba(255, 255, 255, 0.42);
+  color: rgba(255, 255, 255, 0.65);
 }
 
 .footer-links a.link-report:hover,
 .footer-links a.link-feedback:hover,
 .footer-links a.link-feature:hover {
-  color: #f0f0f0;
+  color: #fff;
 }
 
 .footer-links .sep {
@@ -1305,17 +1309,17 @@ input:disabled {
 
 .theme-light .global-footer {
   border-top-color: rgba(19, 93, 168, 0.18);
-  background: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.52);
 }
 
 .theme-light .footer-links span {
-  color: rgba(21, 25, 34, 0.42);
+  color: rgba(21, 25, 34, 0.5);
 }
 
 .theme-light .footer-links a.link-report,
 .theme-light .footer-links a.link-feedback,
 .theme-light .footer-links a.link-feature {
-  color: rgba(21, 25, 34, 0.42);
+  color: rgba(21, 25, 34, 0.6);
 }
 
 .theme-light .footer-links a.link-report:hover,
