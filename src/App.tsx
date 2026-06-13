@@ -596,7 +596,7 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
             <span className="sep">|</span>
             <a className="link-coffee" href="https://buymeacoffee.com/eeriegoesd" target="_blank" rel="noreferrer">Support This Project</a>
             <span className="sep">|</span>
-            <span>Made by</span>
+            <span className="made-by">Made by</span>
             <a className="link-eerie" href="https://eeriegoesd.com/" target="_blank" rel="noreferrer">EERIE</a>
           </div>
         </footer>
