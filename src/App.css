@@ -1266,9 +1266,10 @@ input:disabled {
   font-size: 12px;
 }
 
-.footer-links .made-by {
-  font-weight: 500;
+.footer-links .footer-muted {
+  font-weight: 600;
   color: #d4d4d8;
+  font-size: 13px;
   border-bottom: 1px solid transparent;
 }
 
@@ -1329,7 +1330,7 @@ input:disabled {
   color: rgba(21, 25, 34, 0.3);
 }
 
-.theme-light .footer-links .made-by {
+.theme-light .footer-links .footer-muted {
   color: #3a3f4a;
 }
 
