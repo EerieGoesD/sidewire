@@ -585,6 +585,21 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
             <span>Send</span>
           </button>
         </form>
+
+        <footer className="global-footer">
+          <div className="footer-links">
+            <a className="link-report" href="https://github.com/EerieGoesD/sidewire/issues/new?template=bug-report.md" target="_blank" rel="noreferrer">Report Issue</a>
+            <span className="sep">|</span>
+            <a className="link-feedback" href="https://github.com/EerieGoesD/sidewire/discussions" target="_blank" rel="noreferrer">Feedback</a>
+            <span className="sep">|</span>
+            <a className="link-feature" href="https://github.com/EerieGoesD/sidewire/issues/new?template=feature-request.md" target="_blank" rel="noreferrer">Suggest Feature</a>
+            <span className="sep">|</span>
+            <a className="link-coffee" href="https://buymeacoffee.com/eeriegoesd" target="_blank" rel="noreferrer">Support This Project</a>
+            <span className="sep">|</span>
+            <span>Made by</span>
+            <a className="link-eerie" href="https://eeriegoesd.com/" target="_blank" rel="noreferrer">EERIE</a>
+          </div>
+        </footer>
       </section>
     </main>
   );
