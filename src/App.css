@@ -1267,8 +1267,9 @@ input:disabled {
 }
 
 .footer-links .made-by {
-  font-weight: 600;
+  font-weight: 500;
   color: #d4d4d8;
+  border-bottom: 1px solid transparent;
 }
 
 .footer-links a {
