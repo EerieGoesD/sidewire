@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Bookmark,
   Camera,
   CheckCircle2,
   Clipboard,
   Download,
   FileText,
+  History,
   Link2,
   LogOut,
   Moon,
@@ -15,7 +17,9 @@ import {
   Smartphone,
   Sun,
   Terminal,
+  Trash2,
   Wifi,
+  X,
 } from "lucide-react";
 import jsQR from "jsqr";
 import { QRCodeSVG } from "qrcode.react";
@@ -49,6 +53,13 @@ type LinkProfile = {
   protocol: string;
   incomingDir: string;
   phoneConnected: boolean;
+};
+
+type SavedConversation = {
+  id: string;
+  label: string;
+  savedAt: number;
+  messages: LinkMessage[];
 };
 
 const fallbackProfile: LinkProfile = {
@@ -169,13 +180,73 @@ function ThemeToggle({ theme, onToggleTheme }: AppViewProps) {
   );
 }
 
+function MessageTranscript({
+  messages,
+  downloadHref,
+}: {
+  messages: LinkMessage[];
+  downloadHref: (msg: LinkMessage) => string;
+}) {
+  const transcriptRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    transcriptRef.current?.scrollTo({
+      top: transcriptRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages.length]);
+
+  return (
+    <div className="transcript" ref={transcriptRef}>
+      {messages.map((message) => (
+        <article
+          className={`message ${message.sender} ${
+            message.sender === "system"
+              ? message.body === "Phone connected."
+                ? "connected"
+                : message.body.startsWith("Phone disconnected")
+                ? "disconnected"
+                : ""
+              : ""
+          }`}
+          key={message.id}
+        >
+          <div className="message-meta">
+            <span>{senderTitle(message.sender)}</span>
+            <time>{formatTime(message.createdAt)}</time>
+          </div>
+          <p>{message.body}</p>
+          {message.kind === "file" && (
+            <div className="file-card">
+              <FileText size={20} />
+              <div>
+                <strong>{message.fileName}</strong>
+                <span>{formatBytes(message.fileSize)}</span>
+              </div>
+              {message.downloadUrl && (
+                <a href={downloadHref(message)} target="_blank" rel="noreferrer" title="Download file">
+                  <Download size={17} />
+                </a>
+              )}
+            </div>
+          )}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
   const [profile, setProfile] = useState<LinkProfile>(fallbackProfile);
   const [messages, setMessages] = useState<LinkMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
-  const transcriptRef = useRef<HTMLDivElement>(null);
+
+  // Conversation history (displayed in the left sidebar rail)
+  const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
+  const [viewingSaved, setViewingSaved] = useState<SavedConversation | null>(null);
+  const [connectPanelOpen, setConnectPanelOpen] = useState(true);
 
   const loadProfile = useCallback(async () => {
     try {
@@ -196,22 +267,24 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
     }
   }, []);
 
+  const refreshSavedConversations = useCallback(async () => {
+    try {
+      setSavedConversations(await invoke<SavedConversation[]>("list_saved_conversations"));
+    } catch {
+      // Ignore — feature not available
+    }
+  }, []);
+
   useEffect(() => {
     loadProfile();
     refreshMessages();
+    refreshSavedConversations();
     const id = window.setInterval(() => {
       loadProfile();
       refreshMessages();
     }, 1200);
     return () => window.clearInterval(id);
-  }, [loadProfile, refreshMessages]);
-
-  useEffect(() => {
-    transcriptRef.current?.scrollTo({
-      top: transcriptRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [messages.length]);
+  }, [loadProfile, refreshMessages, refreshSavedConversations]);
 
   async function sendMessage(event: React.FormEvent) {
     event.preventDefault();
@@ -262,6 +335,40 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
     } catch (err) {
       setError(String(err));
     }
+  }
+
+  async function handleSaveConversation() {
+    try {
+      await invoke<SavedConversation>("save_conversation", { label: "" });
+      await refreshSavedConversations();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleLoadConversation(conv: SavedConversation) {
+    try {
+      const loaded = await invoke<SavedConversation>("load_conversation", { id: conv.id });
+      setViewingSaved(loaded);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleDeleteConversation(id: string) {
+    try {
+      await invoke<void>("delete_conversation", { id });
+      if (viewingSaved?.id === id) {
+        setViewingSaved(null);
+      }
+      await refreshSavedConversations();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  function handleBackToLive() {
+    setViewingSaved(null);
   }
 
   function downloadHref(message: LinkMessage) {
@@ -320,9 +427,45 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
           </div>
         </div>
 
+        {/* Saved conversations integrated into the sidebar rail */}
+        <div className="rail-conversations">
+          <div className="rail-conversations-header">
+            <History size={14} />
+            <span>Saved conversations</span>
+          </div>
+          <div className="rail-conversations-list">
+            {savedConversations.length === 0 && (
+              <div className="rail-conversations-empty">No saved conversations yet.</div>
+            )}
+            {savedConversations.map((conv) => (
+              <div
+                key={conv.id}
+                className={`rail-conversation-item ${viewingSaved?.id === conv.id ? "active" : ""}`}
+                onClick={() => handleLoadConversation(conv)}
+              >
+                <div className="rail-conversation-info">
+                  <strong>{conv.label}</strong>
+                  <span>{conv.messages.length} messages</span>
+                </div>
+                <button
+                  type="button"
+                  className="rail-conversation-delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteConversation(conv.id);
+                  }}
+                  title="Delete conversation"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="privacy-note">
           <ShieldCheck size={17} />
-          <span>No account, no cloud relay. The invite only works from nearby devices on your network.</span>
+          <span>Encrypted. No account, no cloud relay. The invite only works from nearby devices on your network.</span>
         </div>
       </aside>
 
@@ -331,11 +474,31 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
           <div className="peer-heading">
             <span className={`status-dot ${profile.phoneConnected ? "linked" : "waiting"}`} />
             <div>
-              <h1>Device transfer</h1>
-              <p>{profile.phoneConnected ? "Connected to your phone" : "Connect your phone to send messages/files"}</p>
+              <h1>{viewingSaved ? viewingSaved.label : "Device transfer"}</h1>
+              <p>{viewingSaved ? "Viewing saved conversation" : profile.phoneConnected ? "Connected to your phone" : "Connect your phone to send messages/files"}</p>
             </div>
           </div>
           <div className="top-actions">
+            {!viewingSaved && (
+              <button type="button" className="save-button" onClick={handleSaveConversation} title="Save this conversation">
+                <Bookmark size={17} />
+                <span>Save</span>
+              </button>
+            )}
+            {viewingSaved && (
+              <button type="button" className="disconnect-button" onClick={handleBackToLive}>
+                <X size={17} />
+                <span>Back to live</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className={`panel-toggle ${connectPanelOpen ? "active" : ""}`}
+              onClick={() => setConnectPanelOpen(!connectPanelOpen)}
+              title={connectPanelOpen ? "Hide connect panel" : "Show connect panel"}
+            >
+              <Link2 size={17} />
+            </button>
             <ThemeToggle theme={theme} onToggleTheme={onToggleTheme} />
             {profile.phoneConnected && (
               <button type="button" className="disconnect-button" onClick={disconnectPhone}>
@@ -350,37 +513,25 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
           </div>
         </header>
 
-        <div className="workspace-grid">
-          <div className="transcript" ref={transcriptRef}>
-            {messages.map((message) => (
-              <article className={`message ${message.sender}`} key={message.id}>
-                <div className="message-meta">
-                  <span>{senderTitle(message.sender)}</span>
-                  <time>{formatTime(message.createdAt)}</time>
-                </div>
-                <p>{message.body}</p>
-                {message.kind === "file" && (
-                  <div className="file-card">
-                    <FileText size={20} />
-                    <div>
-                      <strong>{message.fileName}</strong>
-                      <span>{formatBytes(message.fileSize)}</span>
-                    </div>
-                    {message.downloadUrl && (
-                      <a href={downloadHref(message)} target="_blank" rel="noreferrer" title="Download file">
-                        <Download size={17} />
-                      </a>
-                    )}
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
+        <div className={`workspace-grid ${connectPanelOpen ? "" : "panel-hidden"}`}>
+          <MessageTranscript
+            messages={viewingSaved ? viewingSaved.messages : messages}
+            downloadHref={downloadHref}
+          />
 
+          {connectPanelOpen && (
           <aside className="connect-panel" aria-label="Connect a phone">
             <div className="panel-command">
               <Link2 size={18} />
               <span>Connect your phone</span>
+              <button
+                type="button"
+                className="panel-close"
+                onClick={() => setConnectPanelOpen(false)}
+                title="Hide panel"
+              >
+                <X size={15} />
+              </button>
             </div>
             <div className="qr-shell">
               {profile.pairingUrl ? (
@@ -416,6 +567,7 @@ function DesktopApp({ theme, onToggleTheme }: AppViewProps) {
             </button>
             {error && <div className="error-line">{error}</div>}
           </aside>
+          )}
         </div>
 
         <form className="composer" onSubmit={sendMessage}>
@@ -609,8 +761,8 @@ function PhoneClientApp({ theme, onToggleTheme }: AppViewProps) {
     }
     const nextInvite = parsed.toString();
     manualDisconnectRef.current = false;
-    const connected = await refreshInvite(nextInvite);
-    if (connected) {
+    const successful = await refreshInvite(nextInvite);
+    if (successful) {
       setInvite(nextInvite);
       stopQrScanner();
     }
