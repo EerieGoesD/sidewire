@@ -15,10 +15,10 @@ val tauriProperties = Properties().apply {
 
 android {
     compileSdk = 36
-    namespace = "com.eeriegoesd.eerielink"
+    namespace = "com.eeriegoesd.sidewire"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "com.eeriegoesd.eerielink"
+        applicationId = "com.eeriegoesd.sidewire"
         minSdk = 24
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
@@ -37,6 +37,9 @@ android {
             }
         }
         getByName("release") {
+            // Local rooms talk to other devices over plain HTTP on the LAN; remote
+            // mode uses wss/TLS. Cleartext must be allowed for local mode to work.
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

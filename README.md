@@ -1,16 +1,17 @@
 # SideWire
 
-Local-first message and file transfer for Windows and nearby devices.
+Message and file transfer between your own devices - locally over Wi-Fi or remotely with end-to-end encryption. No accounts.
 
-## Current MVP
+## How it works
 
-- Tauri 2 desktop app for Windows.
-- Local LAN host started by the desktop app.
-- Phone-accessible transfer page served from the Windows device.
-- Text messages both ways.
-- Phone-to-PC file uploads saved in the local incoming folder.
-- PC-to-phone file shares exposed as token-protected local downloads.
-- No cloud relay or external account.
+SideWire has two ways to connect:
+
+- **Local (same Wi-Fi):** the app runs a small server on your device. Other devices on the same network discover the room and connect directly. Traffic stays on your local network; nothing goes to any server of ours.
+- **Remote (anywhere):** rooms are relayed through our server. Messages, files, and file names are **end-to-end encrypted on your device** with a key derived from the room password, so the relay only ever forwards ciphertext and cannot read your content. Remote rooms require a password.
+
+A phone-accessible transfer page is also served from a Local host for browsers that do not have the app installed.
+
+The relay is open source under `relay/` and can be self-hosted. See the [privacy policy](https://eeriegoesd.com/privacy/sidewire/) for what the relay processes.
 
 ## Run
 

@@ -1,4 +1,4 @@
-package com.eeriegoesd.eerielink
+package com.eeriegoesd.sidewire
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

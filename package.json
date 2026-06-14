@@ -2,7 +2,7 @@
   "name": "eerie-link",
   "private": true,
   "version": "0.1.0",
-  "description": "Local-first terminal chat and file transfer between Windows and nearby devices.",
+  "description": "Chat and file transfer between your own devices - locally over Wi-Fi or remotely with end-to-end encryption.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "jsqr": "^1.4.0",
     "lucide-react": "^1.18.0",
