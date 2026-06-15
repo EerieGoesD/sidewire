@@ -9,6 +9,7 @@ import {
   FileText,
   History,
   Link2,
+  Lock,
   LogOut,
   Menu,
   Moon,
@@ -24,6 +25,8 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { platform } from "@tauri-apps/plugin-os";
+import { getProducts, getProductStatus, purchase, acknowledgePurchase } from "@choochmeque/tauri-plugin-iap-api";
 import "./App.css";
 
 type LinkMessage = {
@@ -61,6 +64,13 @@ const ROOM_HOST_KEY = "sidewire-room-host";
 const ROOM_TOKEN_KEY = "sidewire-room-token";
 const ROOM_MODE_KEY = "sidewire-room-mode";
 const RELAY_URL = "wss://sidewire-relay.fly.dev";
+// Android only: hosting a Remote room requires this Google Play subscription.
+// Other platforms (Windows/desktop) keep Remote free.
+const REMOTE_PRODUCT_ID = "sidewire_remote_monthly";
+// User-facing file size limits (see MAX_FILE_SIZE in relay/server.js and
+// DefaultBodyLimit in src-tauri/src/lib.rs).
+const LOCAL_MAX_LABEL = "500 MB";
+const REMOTE_MAX_LABEL = "100 MB";
 
 function readTheme(): ThemeMode { return localStorage.getItem(THEME_STORAGE_KEY) === "light" ? "light" : "dark"; }
 function readTransport(): Transport {
@@ -156,6 +166,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const [joinPassword, setJoinPassword] = useState("");
   const [joinDeviceName, setJoinDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) || "");
   const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState<"" | "creating" | "opening" | "joining">("");
   const [foundRooms, setFoundRooms] = useState<DiscoveredRoom[]>([]);
   const messagesRef = useRef<LinkMessage[]>([]);
   const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
@@ -169,6 +180,73 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const tokenRef = useRef<string>(localStorage.getItem(ROOM_TOKEN_KEY) || "");
   const remoteRoomReadyRef = useRef(false);
   const relayCodeRef = useRef<string>(""); // remembers the relay room code across mode toggles
+
+  // Remote subscription gate. Gated stores: Android (Play, relay-verified) and
+  // Windows (Microsoft Store, client-side). macOS/Linux: free.
+  const platformRef = useRef<string>("");
+  const isAndroidRef = useRef(false);
+  const gatedPlatformRef = useRef(false); // android or windows -> Remote needs a sub
+  const purchaseTokenRef = useRef<string>("");
+  const [remoteEntitled, setRemoteEntitled] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallPrice, setPaywallPrice] = useState("");
+  const [paywallBusy, setPaywallBusy] = useState(false);
+
+  const refreshEntitlement = useCallback(async () => {
+    try {
+      const status: any = await getProductStatus(REMOTE_PRODUCT_ID, "subs");
+      const active = !!status?.isOwned;
+      if (status?.purchaseToken) purchaseTokenRef.current = status.purchaseToken;
+      setRemoteEntitled(active);
+      return active;
+    } catch { return false; }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      let p = ""; try { p = await platform(); } catch {}
+      platformRef.current = p;
+      isAndroidRef.current = p === "android";
+      gatedPlatformRef.current = p === "android" || p === "windows";
+      if (gatedPlatformRef.current) await refreshEntitlement();
+      else setRemoteEntitled(true); // macOS/Linux: Remote is free
+    })();
+  }, [refreshEntitlement]);
+
+  async function openPaywall() {
+    setShowPaywall(true); setError(""); setPaywallPrice("");
+    try {
+      const r: any = await getProducts([REMOTE_PRODUCT_ID], "subs");
+      const products: any[] = Array.isArray(r) ? r : (r?.products ?? []);
+      const offer = products?.[0]?.subscriptionOfferDetails?.[0];
+      const phase = offer?.pricingPhases?.pricingPhaseList?.[0] ?? offer?.pricingPhases?.[0];
+      setPaywallPrice(phase?.formattedPrice || "$2.99/month");
+    } catch { setPaywallPrice("$2.99/month"); }
+  }
+
+  async function subscribeRemote() {
+    if (paywallBusy) return;
+    setPaywallBusy(true); setError("");
+    try {
+      const r: any = await getProducts([REMOTE_PRODUCT_ID], "subs");
+      const products: any[] = Array.isArray(r) ? r : (r?.products ?? []);
+      const offerToken = products?.[0]?.subscriptionOfferDetails?.[0]?.offerToken;
+      const result: any = await purchase(REMOTE_PRODUCT_ID, "subs", offerToken ? { offerToken } : undefined);
+      const token = result?.purchaseToken;
+      if (token) { purchaseTokenRef.current = token; try { await acknowledgePurchase(token); } catch {} }
+      const active = await refreshEntitlement();
+      if (active || token) { setRemoteEntitled(true); setShowPaywall(false); }
+      else setError("Purchase was not completed.");
+    } catch (err) { setError(String(err)); }
+    setPaywallBusy(false);
+  }
+
+  async function restorePurchase() {
+    setPaywallBusy(true); setError("");
+    const active = await refreshEntitlement();
+    if (active) setShowPaywall(false); else setError("No active subscription found for this Google account.");
+    setPaywallBusy(false);
+  }
 
   // Mobile slide-in drawers (swipe right = links, swipe left = room info)
   const [leftOpen, setLeftOpen] = useState(false);
@@ -259,7 +337,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
         messagesRef.current = mapped; setMessages(mapped);
         setTransportPersist("relay"); setIsHost(false);
         localStorage.setItem(ROOM_JOINED_KEY, "true");
-        setError(""); setView("chat");
+        setBusy(""); setError(""); setView("chat");
         break;
       }
       case "message": {
@@ -278,6 +356,14 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       case "user_left": addLocalMessage(systemMsg(`${msg.deviceName} left`)); break;
       case "room_closed": addLocalMessage(systemMsg("Room closed by host")); break;
       case "error":
+        setBusy("");
+        // Relay rejected an unsubscribed Android host: show the paywall.
+        if (msg.message === "subscription_required") {
+          remoteRoomReadyRef.current = false; relayCodeRef.current = "";
+          if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+          setRemoteEntitled(false); setView("create"); openPaywall();
+          break;
+        }
         setError(msg.message || "Relay error");
         // Join failures: bounce back to the join screen.
         if (/password|not found|not ready|full/i.test(msg.message || "") && !isHost) {
@@ -296,7 +382,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     // machine can cold-start (Fly.io), so a fixed timer would race and hang.
     ws.onopen = () => { onReady?.(); };
     ws.onmessage = (event) => { try { handleRelayEvent(JSON.parse(event.data)); } catch {} };
-    ws.onerror = () => { setError("Could not connect to relay server."); remoteRoomReadyRef.current = false; };
+    ws.onerror = () => { setError("Could not connect to relay server."); remoteRoomReadyRef.current = false; setBusy(""); };
     ws.onclose = () => {};
   }
 
@@ -305,54 +391,65 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // ── Create flow ──
 
   async function createRoom() {
+    if (busy) return;
+    setBusy("creating");
     const name = myDeviceName.trim() || "My Device";
     localStorage.setItem(DEVICE_NAME_KEY, name);
     remoteRoomReadyRef.current = false;
     relayCodeRef.current = "";
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     setRoomMode("local");
-    try { setRoomInfo(await invoke<RoomInfo>("get_room_info")); } catch (err) { setError(String(err)); }
-    setView("create");
+    try { setRoomInfo(await invoke<RoomInfo>("get_room_info")); setView("create"); } catch (err) { setError(String(err)); }
+    finally { setBusy(""); }
   }
 
   function chooseCreateMode(mode: RoomMode) {
-    setRoomMode(mode); setError("");
+    setError("");
     if (mode === "remote") {
+      // Android/Windows: hosting Remote requires an active subscription.
+      if (gatedPlatformRef.current && !remoteEntitled) { setRoomMode("remote"); openPaywall(); return; }
+      setRoomMode("remote");
       if (relayCodeRef.current) {
         setRoomInfo({ roomCode: relayCodeRef.current, deviceName: myDeviceName, devices: [], port: 0, ip: "" });
       } else {
         setRoomInfo({ roomCode: "Connecting...", deviceName: myDeviceName, devices: [], port: 0, ip: "" });
         if (!remoteRoomReadyRef.current) {
           remoteRoomReadyRef.current = true;
-          connectRelay(RELAY_URL, () => sendRelay("create_room"));
+          // Relay verifies Android tokens; Windows is gated client-side, so it
+          // sends no token and the relay treats it like any non-android client.
+          connectRelay(RELAY_URL, () => sendRelay("create_room", { client: platformRef.current || "desktop", purchaseToken: isAndroidRef.current ? purchaseTokenRef.current : undefined }));
         }
       }
     } else {
+      setRoomMode("local");
       refreshRoomInfo();
     }
   }
 
   async function openRoom() {
-    localStorage.setItem(DEVICE_NAME_KEY, myDeviceName.trim() || "My Device");
-    if (roomMode === "remote") {
-      const code = roomInfo?.roomCode;
-      if (!code || code === "Connecting...") { setError("Still connecting to the relay, try again in a moment."); return; }
-      if (!roomPassword.trim()) { setError("Set a room password - it is required for remote rooms."); return; }
-      try {
+    if (busy) return;
+    setBusy("opening");
+    try {
+      localStorage.setItem(DEVICE_NAME_KEY, myDeviceName.trim() || "My Device");
+      if (roomMode === "remote") {
+        const code = roomInfo?.roomCode;
+        if (!code || code === "Connecting...") { setError("Still connecting to the relay, try again in a moment."); return; }
+        if (!roomPassword.trim()) { setError("Set a room password - it is required for remote rooms."); return; }
         const res = await invoke<{ authHash: string }>("remote_set_key", { password: roomPassword.trim(), roomCode: code });
         sendRelay("set_auth", { authHash: res.authHash });
-      } catch (err) { setError(String(err)); return; }
-      setTransportPersist("relay"); setIsHost(true);
-      localStorage.setItem(ROOM_JOINED_KEY, "true");
-      setView("chat");
-      addLocalMessage(systemMsg(`Room opened. Share code: ${code}`));
-    } else {
-      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
-      setTransportPersist("host"); setIsHost(true);
-      invoke("start_local_hosting").catch(() => {}); // begin broadcasting now, not at launch
-      localStorage.setItem(ROOM_JOINED_KEY, "true");
-      setView("chat"); refreshRoomInfo(); refreshMessages();
-    }
+        setTransportPersist("relay"); setIsHost(true);
+        localStorage.setItem(ROOM_JOINED_KEY, "true");
+        setView("chat");
+        addLocalMessage(systemMsg(`Room opened. Share code: ${code}`));
+      } else {
+        if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+        setTransportPersist("host"); setIsHost(true);
+        invoke("start_local_hosting").catch(() => {}); // begin broadcasting now, not at launch
+        localStorage.setItem(ROOM_JOINED_KEY, "true");
+        setView("chat"); refreshRoomInfo(); refreshMessages();
+      }
+    } catch (err) { setError(String(err)); }
+    finally { setBusy(""); }
   }
 
   function cancelCreate() {
@@ -438,29 +535,37 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   }
 
   async function joinRoom(room?: DiscoveredRoom) {
+    if (busy) return;
     const code = (room?.roomCode || joinCode.trim().toUpperCase());
     const name = joinDeviceName.trim() || myDeviceName.trim() || "My Device";
-    const pass = joinPassword;
+    const pass = joinPassword.trim();
     if (!code) { setError("Enter a room code."); return; }
     localStorage.setItem(DEVICE_NAME_KEY, name); setMyDeviceName(name);
-    setError(room ? "Connecting..." : "Looking for the room on your Wi-Fi...");
+    setBusy("joining");
 
-    // 1) Local network: a tapped result, or auto-find the code on the LAN.
-    let target: DiscoveredRoom | null = room || null;
-    if (!target) { try { const rooms = await discoverLan(); target = rooms.find(r => r.roomCode === code) || null; } catch {} }
-    if (target) {
-      const port = await resolvePort(target.ip, code, target.port);
-      if (port > 0 && await joinLocalHost(target.ip, port, code, name)) return;
+    // A password means a remote room - go straight to the relay, no Wi-Fi scan.
+    if (pass && !room) {
+      setError("Connecting to the room...");
+      try {
+        const res = await invoke<{ authHash: string }>("remote_set_key", { password: pass, roomCode: code });
+        connectRelay(RELAY_URL, () => sendRelay("join_room", { roomCode: code, authHash: res.authHash }));
+        // busy stays set until handleRelayEvent receives room_joined or error
+      } catch (err) { setError(String(err)); setBusy(""); }
+      return;
     }
 
-    // 2) Fall back to the remote relay (end-to-end encrypted, password required).
-    if (!pass.trim()) { setError("Could not find that room on your Wi-Fi. If it is a remote room, enter its password to join."); return; }
+    // No password - it is a local room. Find it on the Wi-Fi.
+    setError(room ? "Connecting..." : "Looking for the room on your Wi-Fi...");
     try {
-      const res = await invoke<{ authHash: string }>("remote_set_key", { password: pass.trim(), roomCode: code });
-      connectRelay(RELAY_URL, () => sendRelay("join_room", { roomCode: code, authHash: res.authHash }));
-      setError("Connecting to remote room...");
-      // view switches to chat in handleRelayEvent on room_joined
-    } catch (err) { setError(String(err)); }
+      // Reuse rooms a prior Scan already found; only re-sweep if needed.
+      let target: DiscoveredRoom | null = room || foundRooms.find(r => r.roomCode.toUpperCase() === code) || null;
+      if (!target) { try { const rooms = await discoverLan(); target = rooms.find(r => r.roomCode.toUpperCase() === code) || null; } catch {} }
+      if (target) {
+        const port = await resolvePort(target.ip, code, target.port);
+        if (port > 0 && await joinLocalHost(target.ip, port, code, name)) return;
+      }
+      setError("Could not find that room on your Wi-Fi. If it is a remote room, enter its password to join.");
+    } finally { setBusy(""); }
   }
 
   // ── Messaging / files ──
@@ -571,6 +676,20 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     return `${roomInfo?.devices.length || 1} device(s)`;
   }
 
+  // PAYWALL (Android Remote subscription)
+  if (showPaywall) return (
+    <main className={`lobby-center theme-${theme}`}>
+      <div className="lobby-card">
+        <div className="brand-title" style={{ justifyContent: "center" }}><Lock size={26} /><span>Remote rooms</span></div>
+        <p className="lobby-desc">Local rooms on the same Wi-Fi are always free. Hosting a room over the internet uses our relay - unlock Remote hosting for {paywallPrice || "$2.99/month"}.</p>
+        <button className="lobby-btn lobby-btn-primary" onClick={subscribeRemote} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Subscribe - ${paywallPrice || "$2.99/month"}`}</span></button>
+        <button className="lobby-btn" onClick={restorePurchase} disabled={paywallBusy}><span>Restore purchase</span></button>
+        <button className="lobby-btn" onClick={() => { setShowPaywall(false); setError(""); }} disabled={paywallBusy}><X size={18} /><span>Not now</span></button>
+        {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
+      </div>
+    </main>
+  );
+
   // LOBBY
   if (view === "lobby") return (
     <main className={`lobby-center theme-${theme}`}>
@@ -578,8 +697,8 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
         <div className="brand-title" style={{ justifyContent: "center" }}><Terminal size={28} /><span>{APP_NAME}</span></div>
         <p className="lobby-desc">Send notes and files between your devices - locally over Wi-Fi, or anywhere with end-to-end encryption. No accounts.</p>
         <div className="lobby-buttons">
-          <button className="lobby-btn lobby-btn-primary" onClick={createRoom}><Users size={20} /><span>Create Room</span></button>
-          <button className="lobby-btn" onClick={() => setView("join")}><Link2 size={20} /><span>Join Room</span></button>
+          <button className="lobby-btn lobby-btn-primary" onClick={createRoom} disabled={busy === "creating"}><Users size={20} /><span>{busy === "creating" ? "Creating..." : "Create Room"}</span></button>
+          <button className="lobby-btn" onClick={() => setView("join")} disabled={!!busy}><Link2 size={20} /><span>Join Room</span></button>
         </div>
         <ThemeToggle theme={theme} onToggleTheme={onToggleTheme} />
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
@@ -605,6 +724,10 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
           <button className={`lobby-btn mode-btn ${roomMode === "local" ? "lobby-btn-primary" : ""}`} onClick={() => chooseCreateMode("local")}><span className="mode-btn-main">Local</span><span className="mode-btn-sub">(same Wi-Fi)</span></button>
           <button className={`lobby-btn mode-btn ${roomMode === "remote" ? "lobby-btn-primary" : ""}`} onClick={() => chooseCreateMode("remote")}><span className="mode-btn-main">Remote</span><span className="mode-btn-sub">(anywhere)</span></button>
         </div>
+        <div className="mode-caption-row">
+          <span>Files up to {LOCAL_MAX_LABEL}</span>
+          <span>Files up to {REMOTE_MAX_LABEL}</span>
+        </div>
         {roomMode === "local" ? (
           <>
             <div className="create-ip-row"><span className="create-ip-label">Your IP:</span><span className="create-ip-value">{roomInfo?.ip || "..."}</span></div>
@@ -619,8 +742,8 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
             <p className="create-hint" style={{ fontSize: 11, opacity: 0.45, marginTop: -6 }}>The relay processes your IP address to route the connection. See <a href="https://eeriegoesd.com/privacy/sidewire/" target="_blank" rel="noreferrer" style={{ color: "#6db3ff" }}>Privacy policy</a>.</p>
           </>
         )}
-        <button className="lobby-btn lobby-btn-primary" onClick={openRoom} style={{ marginTop: 8 }}><Send size={18} /><span>Open Room</span></button>
-        <button className="lobby-btn" onClick={cancelCreate} style={{ marginTop: 4 }}><X size={18} /><span>Cancel</span></button>
+        <button className="lobby-btn lobby-btn-primary" onClick={openRoom} disabled={busy === "opening"} style={{ marginTop: 8 }}><Send size={18} /><span>{busy === "opening" ? "Opening..." : "Open Room"}</span></button>
+        <button className="lobby-btn" onClick={cancelCreate} disabled={busy === "opening"} style={{ marginTop: 4 }}><X size={18} /><span>Cancel</span></button>
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
       </div>
     </main>
@@ -631,26 +754,26 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     <main className={`lobby-center theme-${theme}`}>
       <div className="lobby-card">
         <h2 className="create-title"><Link2 size={22} />Join a Room</h2>
-        <button className="lobby-btn lobby-btn-primary" onClick={scanNetwork} disabled={scanning}><span>{scanning ? "Scanning..." : "Scan for rooms on this network"}</span></button>
+        <button className="lobby-btn lobby-btn-primary" onClick={scanNetwork} disabled={scanning || !!busy}><span>{scanning ? "Scanning..." : "Scan for rooms on this network"}</span></button>
         {foundRooms.length > 0 && <div className="found-rooms">
           <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, margin: "8px 0 4px" }}>Found rooms:</p>
           {foundRooms.map(r => (
-            <button key={r.roomCode} className="lobby-btn" onClick={() => joinRoom(r)} style={{ width: "100%", marginBottom: 4, justifyContent: "space-between" }}>
+            <button key={r.roomCode} className="lobby-btn" onClick={() => joinRoom(r)} disabled={!!busy} style={{ width: "100%", marginBottom: 4, justifyContent: "space-between" }}>
               <span><Users size={16} /> {r.roomCode}</span>
-              <span style={{ fontSize: 12, opacity: 0.6 }}>{r.ip}</span>
+              <span style={{ fontSize: 12, opacity: 0.6 }}>{busy === "joining" ? "Joining..." : r.ip}</span>
             </button>
           ))}
         </div>}
         <div className="join-separator"><span>or enter code manually</span></div>
         <div className="join-form-fields">
           <label>Room Code</label>
-          <input value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} placeholder="e.g. SIDE-4X9K" className="lobby-name-input" />
+          <input value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} placeholder="e.g. 7K2Q9X" className="lobby-name-input" />
           <label style={{ marginTop: 10 }}>Password (only for remote rooms)</label>
           <input value={joinPassword} onChange={e => setJoinPassword(e.target.value)} placeholder="leave blank for local rooms" className="lobby-name-input" type="password" />
           <label style={{ marginTop: 10 }}>Your Name (how others see you)</label>
           <input value={joinDeviceName} onChange={e => setJoinDeviceName(e.target.value)} placeholder="Tap to type your name, e.g. My Phone" className="lobby-name-input" />
         </div>
-        <button className="lobby-btn lobby-btn-primary" onClick={() => joinRoom()}><Link2 size={18} /><span>Join Room</span></button>
+        <button className="lobby-btn lobby-btn-primary" onClick={() => joinRoom()} disabled={busy === "joining"}><Link2 size={18} /><span>{busy === "joining" ? "Joining..." : "Join Room"}</span></button>
         <button className="lobby-btn" onClick={() => setView("lobby")}><X size={18} /><span>Back</span></button>
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
       </div>
@@ -664,6 +787,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const privacyNote = transport === "relay"
     ? "End-to-end encrypted with your room password. Our relay only forwards ciphertext - it cannot read your messages or files."
     : "Stays on your local network. No account, no cloud.";
+  const maxFileLabel = transport === "relay" ? REMOTE_MAX_LABEL : LOCAL_MAX_LABEL;
   return (
     <main className={`app-shell theme-${theme}${leftOpen ? " left-open" : ""}${rightOpen ? " right-open" : ""}`} onTouchStart={onChatTouchStart} onTouchEnd={onChatTouchEnd}>
       {(leftOpen || rightOpen) && <div className="drawer-backdrop" onClick={closeDrawers} />}
@@ -678,6 +802,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
         <div className="room-code-sidebar">
           <div className="rail-conversations-header"><Users size={14} /><span>Room Code</span></div>
           <div className="room-code-sidebar-value">{code}</div>
+          <div className="room-code-note">Max file size: {maxFileLabel}</div>
           <button className="copy-code-sidebar" onClick={copyRoomCode}><Clipboard size={14} /><span>{copied ? "Copied" : "Copy"}</span></button>
         </div>
         <div className="rail-conversations">

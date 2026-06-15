@@ -1403,6 +1403,58 @@ input:disabled {
   .disconnect-button span {
     display: none;
   }
+
+  /* Bigger, easier-to-tap lobby / create / join controls on phones, and use
+     more of the screen so there is less empty space top and bottom. */
+  .lobby-card {
+    width: 100%;
+    padding: 26px 20px;
+    gap: 16px;
+  }
+
+  .lobby-desc {
+    font-size: 15px;
+  }
+
+  .lobby-card .brand-title {
+    font-size: 26px;
+  }
+
+  .create-title {
+    font-size: 22px;
+  }
+
+  .lobby-name-input,
+  .room-password-row .lobby-name-input {
+    height: 52px;
+    font-size: 16px;
+    max-width: 100%;
+  }
+
+  .lobby-btn {
+    height: 54px;
+    font-size: 16px;
+  }
+
+  .lobby-buttons {
+    gap: 12px;
+  }
+
+  .mode-btn {
+    min-height: 64px;
+  }
+
+  .join-form-fields {
+    gap: 8px;
+  }
+
+  .join-form-fields label {
+    font-size: 14px;
+  }
+
+  .mode-caption-row span {
+    font-size: 12px;
+  }
 }
 
 /* ── Rail conversation list (in left sidebar) ── */
@@ -1773,6 +1825,12 @@ input:disabled {
   box-shadow: 0 0 10px rgba(30, 144, 255, 0.22);
 }
 
+.lobby-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  box-shadow: none;
+}
+
 .lobby-btn-primary {
   border-color: #1e90ff;
   background: rgba(30, 144, 255, 0.15);
@@ -1927,6 +1985,23 @@ input:disabled {
   gap: 8px;
 }
 
+.mode-caption-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: -4px;
+}
+
+.mode-caption-row span {
+  text-align: center;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.theme-light .mode-caption-row span {
+  color: rgba(21, 25, 34, 0.55);
+}
+
 .mode-btn {
   flex-direction: column;
   gap: 1px;
@@ -1958,6 +2033,32 @@ input:disabled {
   font-weight: 700;
   color: #1e90ff;
   letter-spacing: 1px;
+}
+
+.room-code-note {
+  font-size: 11px;
+  color: rgba(245, 158, 11, 0.85);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.room-code-note::before {
+  content: "!";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.18);
+  color: #f59e0b;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.theme-light .room-code-note {
+  color: #b9770a;
 }
 
 .copy-code-sidebar {

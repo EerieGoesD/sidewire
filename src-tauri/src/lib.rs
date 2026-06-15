@@ -107,8 +107,7 @@ struct ApiQuery {
 fn generate_room_code() -> String {
     const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let mut rng = rand::thread_rng();
-    let code: String = (0..ROOM_CODE_LEN).map(|_| { let idx = rng.gen_range(0..CHARS.len()); CHARS[idx] as char }).collect();
-    format!("SIDE-{}", code)
+    (0..ROOM_CODE_LEN).map(|_| { let idx = rng.gen_range(0..CHARS.len()); CHARS[idx] as char }).collect()
 }
 
 // ── Helpers ──
@@ -714,6 +713,7 @@ fn start_link_server(device_name: String) -> Result<LinkRuntime, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_opener::init()).plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_iap::init()).plugin(tauri_plugin_os::init())
         .setup(|app| {
             let runtime = start_link_server(local_device_name()).map_err(|e| Box::<dyn std::error::Error>::from(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
             app.manage(runtime);
@@ -748,7 +748,7 @@ input[type=file]{display:none}.error{color:#e84a8a;padding:8px 16px 0;font-size:
 <div class="shell" id="app"><header><div><div class="prompt">SideWire</div><strong id="roomLabel">Join a room</strong></div><div class="room-code" id="roomCode"></div></header>
 <div class="error" id="error"></div>
 <div id="joinView" class="join-form">
-<label for="code">Room code</label><input id="code" type="text" autocomplete="off" placeholder="e.g. SIDE-4X9K"/>
+<label for="code">Room code</label><input id="code" type="text" autocomplete="off" placeholder="e.g. 7K2Q9X"/>
 <label for="pw">Password (if required)</label><input id="pw" class="pw-input" type="text" autocomplete="off" placeholder="leave blank if none"/>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><label for="dname">Your name</label><input id="dname" type="text" autocomplete="off" placeholder="My Phone" value="Phone"/></div>
 <button class="join-btn" id="joinBtn">Join Room</button></div>
@@ -761,7 +761,7 @@ function bytes(n){if(!n)return"0 B";const u=["B","KB","MB","GB"];let v=n,i=0;whi
 async function join(){const code=c.value.trim().toUpperCase(),pass=pw.value.trim(),name=dn.value.trim()||"Phone";if(!code){err.textContent="Enter a room code.";return}
 const ip=prompt("Host IP (shown on their screen):");if(!ip){err.textContent="";return}
 err.textContent="Searching...";
-for(let port=8765;port<=8784;port++){try{const r=await fetch("http://"+ip+":"+port+"/api/room",{cache:"no-store"});if(r.ok){const i=await r.json();if(i.roomCode===code||i.roomCode===code.replace("SIDE-","")){host=ip+":"+port;break}}}catch{}}
+for(let port=8765;port<=8784;port++){try{const r=await fetch("http://"+ip+":"+port+"/api/room",{cache:"no-store"});if(r.ok){const i=await r.json();if(i.roomCode===code){host=ip+":"+port;break}}}catch{}}
 if(!host){err.textContent="Could not find room.";return}
 let joinUrl="http://"+host+"/api/join?device="+encodeURIComponent(name);
 if(pass)joinUrl+="&password="+encodeURIComponent(pass);

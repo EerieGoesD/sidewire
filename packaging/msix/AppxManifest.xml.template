@@ -14,7 +14,7 @@
   <Properties>
     <DisplayName>SideWire</DisplayName>
     <PublisherDisplayName>EERIE</PublisherDisplayName>
-    <Description>Local-first message and file transfer between Windows and nearby devices.</Description>
+    <Description>Message and file transfer between your devices - locally over Wi-Fi or remotely with end-to-end encryption.</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
@@ -34,7 +34,7 @@
 
       <uap:VisualElements
         DisplayName="SideWire"
-        Description="Local device message and file transfer"
+        Description="Message and file transfer between your devices, local or end-to-end encrypted remote"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

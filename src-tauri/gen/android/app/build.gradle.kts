@@ -13,9 +13,30 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing. Reads from keystore.properties (gitignored) if present, so the
+// release build is signed for the Play Store; if the file is absent the build
+// still works (produces an unsigned bundle).
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.eeriegoesd.sidewire"
+
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = keystoreProperties.getProperty("storeFile")?.let { rootProject.file(it) }
+                storePassword = keystoreProperties.getProperty("storePassword")
+            }
+        }
+    }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.eeriegoesd.sidewire"
@@ -40,6 +61,9 @@ android {
             // Local rooms talk to other devices over plain HTTP on the LAN; remote
             // mode uses wss/TLS. Cleartext must be allowed for local mode to work.
             manifestPlaceholders["usesCleartextTraffic"] = "true"
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
