@@ -645,6 +645,13 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
         const savePath = await save({ defaultPath: origName });
         if (!savePath) return;
         await invoke("save_local_download", { cipherBase64, keyHex, savePath });
+      } else if (transport === "host") {
+        if (!m.downloadUrl) return;
+        const fileId = m.downloadUrl.split("/").pop() || "";
+        if (!fileId) return;
+        const savePath = await save({ defaultPath: m.fileName || "file" });
+        if (!savePath) return;
+        await invoke("save_host_file", { fileId, savePath });
       }
     } catch (err) { setError(String(err)); }
   }
@@ -836,7 +843,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
           </div>
         </header>
         <div className="workspace-grid panel-hidden">
-          <MessageTranscript messages={viewingSaved ? viewingSaved.messages : messages} onSaveFile={viewingSaved || transport === "host" ? undefined : saveFile} selfName={myDeviceName || "Me"} />
+          <MessageTranscript messages={viewingSaved ? viewingSaved.messages : messages} onSaveFile={viewingSaved ? undefined : saveFile} selfName={myDeviceName || "Me"} />
         </div>
         <form className="composer" onSubmit={sendMessage}>
           <input ref={fileInputRef} type="file" multiple onChange={onFilesPicked} style={{ display: "none" }} />

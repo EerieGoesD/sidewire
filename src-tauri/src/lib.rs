@@ -555,6 +555,21 @@ fn save_local_download(cipher_base64: String, key_hex: String, save_path: String
     Ok(())
 }
 
+// Save a file that another device uploaded to THIS host. Uploads are stored
+// encrypted on disk (nonce||ciphertext, room key), so decrypt with the room key
+// and write the plaintext to save_path. file_id is the trailing segment of the
+// message's download_url (/api/download/{file_id}).
+#[tauri::command]
+fn save_host_file(runtime: tauri::State<'_, LinkRuntime>, file_id: String, save_path: String) -> Result<(), String> {
+    let key = runtime.room.lock().map(|r| get_encryption_key(&r)).map_err(|_| "room unavailable".to_string())?;
+    let shared = runtime.state.lock().map_err(|_| "state unavailable".to_string())?.files.get(&file_id).cloned();
+    let shared = shared.ok_or_else(|| "file not found".to_string())?;
+    let cipher = std::fs::read(&shared.path).map_err(|e| format!("cannot read file: {}", e))?;
+    let plain = decrypt_bytes(&cipher, &key)?;
+    std::fs::write(&save_path, plain).map_err(|e| format!("cannot save file: {}", e))?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn discover_rooms(runtime: tauri::State<'_, LinkRuntime>, timeout_secs: u64) -> Result<Vec<serde_json::Value>, String> {
     let own_code = runtime.room.lock().map(|r| r.room_code.clone()).unwrap_or_default();
@@ -719,7 +734,7 @@ pub fn run() {
             app.manage(runtime);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, share_file_bytes, start_local_hosting, stop_local_hosting])
+        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, save_host_file, share_file_bytes, start_local_hosting, stop_local_hosting])
         .run(tauri::generate_context!()).expect("error while running tauri application");
 }
 
