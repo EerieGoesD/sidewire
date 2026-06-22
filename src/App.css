@@ -1226,7 +1226,8 @@ input:disabled {
     width: min(86%, 330px);
     transform: translateX(-100%);
     transition: transform 0.25s ease;
-    display: block;
+    display: flex;
+    flex-direction: column;
     justify-content: flex-start;
     border-top: 0;
     border-right: 1px solid rgba(30, 144, 255, 0.22);
@@ -1255,6 +1256,15 @@ input:disabled {
   .app-shell .global-footer .footer-links .footer-madeby {
     font-size: 16px;
     padding: 12px 0;
+  }
+
+  /* Version sits at the bottom-left of the links drawer on mobile. */
+  .app-shell .global-footer .footer-version {
+    order: 3;
+    margin-top: auto;
+    margin-right: 0;
+    padding-top: 16px;
+    align-self: flex-start;
   }
 
   .app-shell.theme-light .terminal-rail,
@@ -1653,6 +1663,118 @@ input:disabled {
 .theme-light .global-footer {
   border-top-color: rgba(19, 93, 168, 0.12);
   background: rgba(255, 255, 255, 0.6);
+}
+
+/* Build version: bottom-left of the footer row on desktop. */
+.footer-version {
+  margin-right: auto;
+  color: rgba(255, 255, 255, 0.32);
+  font-size: 12px;
+  font-family: inherit;
+  letter-spacing: 0.3px;
+}
+
+.theme-light .footer-version {
+  color: rgba(19, 93, 168, 0.55);
+}
+
+/* Info button (lobby / create / join) and the about popup. */
+.info-fab {
+  position: fixed;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  right: 16px;
+  z-index: 50;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(30, 144, 255, 0.34);
+  background: rgba(10, 10, 15, 0.82);
+  color: #1e90ff;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.info-fab:hover {
+  background: rgba(30, 144, 255, 0.16);
+  border-color: rgba(30, 144, 255, 0.6);
+}
+
+.theme-light .info-fab {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(19, 93, 168, 0.34);
+  color: #135da8;
+}
+
+.info-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.info-modal {
+  position: relative;
+  width: min(94%, 420px);
+  background: #0b0b12;
+  border: 1px solid rgba(30, 144, 255, 0.28);
+  border-radius: 12px;
+  padding: 28px 22px 22px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  text-align: center;
+}
+
+.theme-light .info-modal {
+  background: #ffffff;
+  border-color: rgba(19, 93, 168, 0.28);
+}
+
+.info-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.info-modal-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.theme-light .info-modal-close {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.info-version {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  margin: 6px 0 16px;
+  letter-spacing: 0.3px;
+}
+
+.theme-light .info-version {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.info-links.footer-links {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 8px;
 }
 
 .theme-light .footer-links span {

@@ -1,5 +1,5 @@
 import { Component, useCallback, useEffect, useRef, useState } from "react";
-import type { ErrorInfo, ReactNode } from "react";
+import type { ErrorInfo, ReactNode, MouseEvent } from "react";
 import {
   Bookmark,
   ChevronLeft,
@@ -8,6 +8,7 @@ import {
   Download,
   FileText,
   History,
+  Info,
   Link2,
   Lock,
   LogOut,
@@ -23,6 +24,8 @@ import {
   X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { save } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { platform } from "@tauri-apps/plugin-os";
@@ -55,6 +58,12 @@ type RoomMode = "local" | "remote";
 type Transport = "host" | "client" | "relay";
 
 const APP_NAME = "SideWire";
+
+// Open external links through Tauri's opener (plain target="_blank" anchors do
+// not open a browser from the webview, especially on Android).
+function openExternal(url: string) {
+  return (e: MouseEvent) => { e.preventDefault(); openUrl(url).catch(() => {}); };
+}
 const BRAND_PROMPT = "sidewire";
 const THEME_STORAGE_KEY = "sidewire-theme";
 const ROOM_JOINED_KEY = "sidewire-room-joined";
@@ -64,9 +73,12 @@ const ROOM_HOST_KEY = "sidewire-room-host";
 const ROOM_TOKEN_KEY = "sidewire-room-token";
 const ROOM_MODE_KEY = "sidewire-room-mode";
 const RELAY_URL = "wss://sidewire-relay.fly.dev";
-// Android only: hosting a Remote room requires this Google Play subscription.
-// Other platforms (Windows/desktop) keep Remote free.
+// Hosting a Remote room requires a subscription on the gated stores.
+// Android (Play): one subscription product with a monthly AND a yearly base plan.
+// Windows (Microsoft Store): two separate add-ons (monthly + yearly).
+// macOS/Linux: Remote stays free.
 const REMOTE_PRODUCT_ID = "sidewire_remote_monthly";
+const REMOTE_YEARLY_PRODUCT_ID = "sidewire_remote_yearly";
 // User-facing file size limits (see MAX_FILE_SIZE in relay/server.js and
 // DefaultBodyLimit in src-tauri/src/lib.rs).
 const LOCAL_MAX_LABEL = "500 MB";
@@ -153,11 +165,10 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
-  const [view, setView] = useState<"lobby" | "create" | "join" | "chat">(() => {
-    const joined = localStorage.getItem(ROOM_JOINED_KEY) === "true";
-    // Relay sessions are in-memory on the server and cannot be restored after a restart.
-    return joined && readTransport() !== "relay" ? "chat" : "lobby";
-  });
+  // Quitting the app means leaving the room: always start at the lobby, never
+  // auto-restore a prior session. (The clear-on-launch effect below wipes the
+  // stale room state.)
+  const [view, setView] = useState<"lobby" | "create" | "join" | "chat">("lobby");
   const [myDeviceName, setMyDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) || "");
   const [roomMode, setRoomMode] = useState<RoomMode>("local"); // create-view selection only
   const [transport, setTransport] = useState<Transport>(readTransport);
@@ -178,6 +189,22 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   useEffect(() => { transportRef.current = transport; }, [transport]);
   const hostRef = useRef<string>(localStorage.getItem(ROOM_HOST_KEY) || "");
   const tokenRef = useRef<string>(localStorage.getItem(ROOM_TOKEN_KEY) || "");
+
+  // Leaving on exit: clear any persisted room session on launch so a restart
+  // never drops the user back into a room they have effectively already left.
+  useEffect(() => {
+    localStorage.removeItem(ROOM_JOINED_KEY);
+    localStorage.removeItem(ROOM_CODE_KEY);
+    localStorage.removeItem(ROOM_HOST_KEY);
+    localStorage.removeItem(ROOM_TOKEN_KEY);
+    hostRef.current = "";
+    tokenRef.current = "";
+  }, []);
+
+  // App version (from tauri.conf.json) for the info popup and the footer.
+  const [appVersion, setAppVersion] = useState("");
+  const [showInfo, setShowInfo] = useState(false);
+  useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
   const remoteRoomReadyRef = useRef(false);
   const relayCodeRef = useRef<string>(""); // remembers the relay room code across mode toggles
 
@@ -190,15 +217,23 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const [remoteEntitled, setRemoteEntitled] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [paywallPrice, setPaywallPrice] = useState("");
+  const [paywallYearlyPrice, setPaywallYearlyPrice] = useState("");
   const [paywallBusy, setPaywallBusy] = useState(false);
 
   const refreshEntitlement = useCallback(async () => {
     try {
-      const status: any = await getProductStatus(REMOTE_PRODUCT_ID, "subs");
-      const active = !!status?.isOwned;
-      if (status?.purchaseToken) purchaseTokenRef.current = status.purchaseToken;
-      setRemoteEntitled(active);
-      return active;
+      // Android: one subscription covers both plans. Windows: check both add-ons.
+      const ids = isAndroidRef.current ? [REMOTE_PRODUCT_ID] : [REMOTE_PRODUCT_ID, REMOTE_YEARLY_PRODUCT_ID];
+      for (const id of ids) {
+        const status: any = await getProductStatus(id, "subs");
+        if (status?.isOwned) {
+          if (status?.purchaseToken) purchaseTokenRef.current = status.purchaseToken;
+          setRemoteEntitled(true);
+          return true;
+        }
+      }
+      setRemoteEntitled(false);
+      return false;
     } catch { return false; }
   }, []);
 
@@ -213,25 +248,56 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     })();
   }, [refreshEntitlement]);
 
-  async function openPaywall() {
-    setShowPaywall(true); setError(""); setPaywallPrice("");
-    try {
+  // Resolve the monthly and yearly purchase options for the current store.
+  // Android: both plans are base-plan offers under the one subscription product.
+  // Windows: two separate add-on products.
+  async function loadRemoteOffers(): Promise<{
+    monthly: { productId: string; offerToken?: string; price: string } | null;
+    yearly: { productId: string; offerToken?: string; price: string } | null;
+  }> {
+    if (isAndroidRef.current) {
       const r: any = await getProducts([REMOTE_PRODUCT_ID], "subs");
       const products: any[] = Array.isArray(r) ? r : (r?.products ?? []);
-      const offer = products?.[0]?.subscriptionOfferDetails?.[0];
-      const phase = offer?.pricingPhases?.pricingPhaseList?.[0] ?? offer?.pricingPhases?.[0];
-      setPaywallPrice(phase?.formattedPrice || "$2.99/month");
-    } catch { setPaywallPrice("$2.99/month"); }
+      const offers: any[] = products?.[0]?.subscriptionOfferDetails ?? [];
+      const lastPhase = (o: any) => { const ph = o?.pricingPhases?.pricingPhaseList ?? o?.pricingPhases ?? []; return ph[ph.length - 1] ?? ph[0]; };
+      const period = (o: any) => String(lastPhase(o)?.billingPeriod ?? "");
+      const price = (o: any) => lastPhase(o)?.formattedPrice ?? "";
+      const yearly = offers.find(o => period(o).includes("Y")) ?? null;
+      const monthly = offers.find(o => o !== yearly && period(o).includes("M")) ?? offers.find(o => o !== yearly) ?? null;
+      return {
+        monthly: monthly ? { productId: REMOTE_PRODUCT_ID, offerToken: monthly.offerToken, price: price(monthly) } : null,
+        yearly: yearly ? { productId: REMOTE_PRODUCT_ID, offerToken: yearly.offerToken, price: price(yearly) } : null,
+      };
+    }
+    // Windows (Microsoft Store): two add-on products.
+    const r: any = await getProducts([REMOTE_PRODUCT_ID, REMOTE_YEARLY_PRODUCT_ID], "subs");
+    const products: any[] = Array.isArray(r) ? r : (r?.products ?? []);
+    const byId = (id: string) => products.find(p => (p?.productId ?? p?.id) === id);
+    const price = (p: any) => p?.formattedPrice ?? p?.price ?? p?.priceString ?? "";
+    const m = byId(REMOTE_PRODUCT_ID), y = byId(REMOTE_YEARLY_PRODUCT_ID);
+    return {
+      monthly: { productId: REMOTE_PRODUCT_ID, price: m ? price(m) : "" },
+      yearly: { productId: REMOTE_YEARLY_PRODUCT_ID, price: y ? price(y) : "" },
+    };
   }
 
-  async function subscribeRemote() {
+  async function openPaywall() {
+    setShowPaywall(true); setError(""); setPaywallPrice(""); setPaywallYearlyPrice("");
+    try {
+      const offers = await loadRemoteOffers();
+      setPaywallPrice(offers.monthly?.price || "");
+      setPaywallYearlyPrice(offers.yearly?.price || "");
+    } catch {}
+  }
+
+  async function subscribeRemote(plan: "monthly" | "yearly") {
     if (paywallBusy) return;
     setPaywallBusy(true); setError("");
     try {
-      const r: any = await getProducts([REMOTE_PRODUCT_ID], "subs");
-      const products: any[] = Array.isArray(r) ? r : (r?.products ?? []);
-      const offerToken = products?.[0]?.subscriptionOfferDetails?.[0]?.offerToken;
-      const result: any = await purchase(REMOTE_PRODUCT_ID, "subs", offerToken ? { offerToken } : undefined);
+      const offers = await loadRemoteOffers();
+      const sel = plan === "yearly" ? offers.yearly : offers.monthly;
+      if (!sel) { setError("That plan is not available right now."); setPaywallBusy(false); return; }
+      const result: any = await purchase(sel.productId, "subs", sel.offerToken ? { offerToken: sel.offerToken } : undefined);
       const token = result?.purchaseToken;
       if (token) { purchaseTokenRef.current = token; try { await acknowledgePurchase(token); } catch {} }
       const active = await refreshEntitlement();
@@ -683,13 +749,49 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     return `${roomInfo?.devices.length || 1} device(s)`;
   }
 
+  // Footer links, reused in the chat footer and the info popup.
+  const footerLinkEls = (
+    <>
+      <a className="link-report" href="https://github.com/EerieGoesD/sidewire/issues/new?template=bug-report.md" onClick={openExternal("https://github.com/EerieGoesD/sidewire/issues/new?template=bug-report.md")}>Report Issue</a>
+      <span className="sep">|</span>
+      <a className="link-feedback" href="https://github.com/EerieGoesD/sidewire/discussions" onClick={openExternal("https://github.com/EerieGoesD/sidewire/discussions")}>Feedback</a>
+      <span className="sep">|</span>
+      <a className="link-feature" href="https://github.com/EerieGoesD/sidewire/issues/new?template=feature-request.md" onClick={openExternal("https://github.com/EerieGoesD/sidewire/issues/new?template=feature-request.md")}>Suggest Feature</a>
+      <span className="sep">|</span>
+      <a className="link-coffee" href="https://buymeacoffee.com/eeriegoesd" onClick={openExternal("https://buymeacoffee.com/eeriegoesd")}>Support This Project</a>
+      <span className="sep">|</span>
+      <a className="link-report" href="https://eeriegoesd.com/privacy/sidewire/" onClick={openExternal("https://eeriegoesd.com/privacy/sidewire/")}>Privacy</a>
+      <span className="sep">|</span>
+      <span className="footer-madeby">Made by <a className="link-eerie" href="https://eeriegoesd.com/" onClick={openExternal("https://eeriegoesd.com/")}>EERIE</a></span>
+    </>
+  );
+
+  // Info button + popup shown on the lobby / create / join screens.
+  const infoOverlay = (
+    <>
+      <button type="button" className="info-fab" onClick={() => setShowInfo(true)} title="About SideWire" aria-label="About SideWire"><Info size={18} /></button>
+      {showInfo && (
+        <div className="info-modal-backdrop" onClick={() => setShowInfo(false)}>
+          <div className="info-modal" onClick={e => e.stopPropagation()}>
+            <button type="button" className="info-modal-close" onClick={() => setShowInfo(false)} aria-label="Close"><X size={18} /></button>
+            <div className="brand-title" style={{ justifyContent: "center" }}><Terminal size={24} /><span>{APP_NAME}</span></div>
+            <div className="info-version">Version {appVersion || "..."}</div>
+            <div className="info-links footer-links">{footerLinkEls}</div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   // PAYWALL (Android Remote subscription)
   if (showPaywall) return (
     <main className={`lobby-center theme-${theme}`}>
       <div className="lobby-card">
         <div className="brand-title" style={{ justifyContent: "center" }}><Lock size={26} /><span>Remote rooms</span></div>
-        <p className="lobby-desc">Local rooms on the same Wi-Fi are always free. Hosting a room over the internet uses our relay - unlock Remote hosting for {paywallPrice || "$2.99/month"}.</p>
-        <button className="lobby-btn lobby-btn-primary" onClick={subscribeRemote} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Subscribe - ${paywallPrice || "$2.99/month"}`}</span></button>
+        <p className="lobby-desc">Local rooms on the same Wi-Fi are always free. Hosting a room over the internet uses our relay - unlock Remote hosting:</p>
+        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("monthly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Monthly - ${paywallPrice || "2.99 EUR/month"}`}</span></button>
+        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("yearly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Yearly - ${paywallYearlyPrice || "19.99 EUR/year"}`}</span></button>
+        <p className="create-hint" style={{ fontSize: 12, opacity: 0.55, marginTop: 2 }}>Yearly saves about 44% versus monthly.</p>
         <button className="lobby-btn" onClick={restorePurchase} disabled={paywallBusy}><span>Restore purchase</span></button>
         <button className="lobby-btn" onClick={() => { setShowPaywall(false); setError(""); }} disabled={paywallBusy}><X size={18} /><span>Not now</span></button>
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
@@ -700,6 +802,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // LOBBY
   if (view === "lobby") return (
     <main className={`lobby-center theme-${theme}`}>
+      {infoOverlay}
       <div className="lobby-card">
         <div className="brand-title" style={{ justifyContent: "center" }}><Terminal size={28} /><span>{APP_NAME}</span></div>
         <p className="lobby-desc">Send notes and files between your devices - locally over Wi-Fi, or anywhere with end-to-end encryption. No accounts.</p>
@@ -716,6 +819,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // CREATE ROOM
   if (view === "create") return (
     <main className={`lobby-center theme-${theme}`}>
+      {infoOverlay}
       <div className="lobby-card">
         <h2 className="create-title"><Terminal size={22} />Your Room</h2>
         <div className="room-code-display">
@@ -746,7 +850,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
               <input value={roomPassword} onChange={e => setRoomPassword(e.target.value)} placeholder="Room password (required)" className="lobby-name-input" type="password" />
             </div>
             <p className="create-hint" style={{ fontSize: 12, opacity: 0.6 }}>Works anywhere through our relay. Messages and files are end-to-end encrypted with this password - the relay only forwards ciphertext and cannot read them. Share the password securely; without it the room cannot be joined or decrypted.</p>
-            <p className="create-hint" style={{ fontSize: 11, opacity: 0.45, marginTop: -6 }}>The relay processes your IP address to route the connection. See <a href="https://eeriegoesd.com/privacy/sidewire/" target="_blank" rel="noreferrer" style={{ color: "#6db3ff" }}>Privacy policy</a>.</p>
+            <p className="create-hint" style={{ fontSize: 11, opacity: 0.45, marginTop: -6 }}>The relay processes your IP address to route the connection. See <a href="https://eeriegoesd.com/privacy/sidewire/" onClick={openExternal("https://eeriegoesd.com/privacy/sidewire/")} style={{ color: "#6db3ff" }}>Privacy policy</a>.</p>
           </>
         )}
         <button className="lobby-btn lobby-btn-primary" onClick={openRoom} disabled={busy === "opening"} style={{ marginTop: 8 }}><Send size={18} /><span>{busy === "opening" ? "Opening..." : "Open Room"}</span></button>
@@ -759,6 +863,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // JOIN ROOM
   if (view === "join") return (
     <main className={`lobby-center theme-${theme}`}>
+      {infoOverlay}
       <div className="lobby-card">
         <h2 className="create-title"><Link2 size={22} />Join a Room</h2>
         <button className="lobby-btn lobby-btn-primary" onClick={scanNetwork} disabled={scanning || !!busy}><span>{scanning ? "Scanning..." : "Scan for rooms on this network"}</span></button>
@@ -852,20 +957,9 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
           <button type="submit" className="send-button" title="Send"><Send size={18} /><span>Send</span></button>
         </form>
         <footer className="global-footer">
+          <span className="footer-version">{appVersion ? `v${appVersion}` : ""}</span>
           <div className="footer-drawer-title">Help &amp; Links</div>
-          <div className="footer-links">
-            <a className="link-report" href="https://github.com/EerieGoesD/sidewire/issues/new?template=bug-report.md" target="_blank" rel="noreferrer">Report Issue</a>
-            <span className="sep">|</span>
-            <a className="link-feedback" href="https://github.com/EerieGoesD/sidewire/discussions" target="_blank" rel="noreferrer">Feedback</a>
-            <span className="sep">|</span>
-            <a className="link-feature" href="https://github.com/EerieGoesD/sidewire/issues/new?template=feature-request.md" target="_blank" rel="noreferrer">Suggest Feature</a>
-            <span className="sep">|</span>
-            <a className="link-coffee" href="https://buymeacoffee.com/eeriegoesd" target="_blank" rel="noreferrer">Support This Project</a>
-            <span className="sep">|</span>
-            <a className="link-report" href="https://eeriegoesd.com/privacy/sidewire/" target="_blank" rel="noreferrer">Privacy</a>
-            <span className="sep">|</span>
-            <span className="footer-madeby">Made by <a className="link-eerie" href="https://eeriegoesd.com/" target="_blank" rel="noreferrer">EERIE</a></span>
-          </div>
+          <div className="footer-links">{footerLinkEls}</div>
         </footer>
       </section>
     </main>
