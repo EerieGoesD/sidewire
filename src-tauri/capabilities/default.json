@@ -12,6 +12,8 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
+    "fs:default",
+    "fs:allow-write-file",
     "notification:default",
     "os:default",
     "iap:default"

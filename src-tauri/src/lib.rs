@@ -570,6 +570,41 @@ fn save_host_file(runtime: tauri::State<'_, LinkRuntime>, file_id: String, save_
     Ok(())
 }
 
+// ── Decrypt-to-base64: return the plaintext file bytes to the webview (for
+// previewing the image inline and for writing via the fs plugin, which handles
+// Android content URIs that std::fs cannot). One command per transport. ──
+
+#[tauri::command]
+fn remote_decrypt_base64(runtime: tauri::State<'_, LinkRuntime>, payload: String) -> Result<LocalFileResult, String> {
+    let key = current_remote_key(&runtime)?;
+    let data = BASE64.decode(payload.as_bytes()).map_err(|_| "bad payload".to_string())?;
+    let plain = decrypt_bytes(&data, &key)?;
+    let (name, mime, bytes) = unframe_file(&plain)?;
+    Ok(LocalFileResult { file_name: name, file_mime: mime, base64: BASE64.encode(bytes) })
+}
+
+#[tauri::command]
+fn host_file_base64(runtime: tauri::State<'_, LinkRuntime>, file_id: String) -> Result<LocalFileResult, String> {
+    let key = runtime.room.lock().map(|r| get_encryption_key(&r)).map_err(|_| "room unavailable".to_string())?;
+    let shared = runtime.state.lock().map_err(|_| "state unavailable".to_string())?.files.get(&file_id).cloned();
+    let shared = shared.ok_or_else(|| "file not found".to_string())?;
+    let cipher = std::fs::read(&shared.path).map_err(|e| format!("cannot read file: {}", e))?;
+    let plain = decrypt_bytes(&cipher, &key)?;
+    Ok(LocalFileResult { file_name: shared.file_name.clone(), file_mime: shared.mime.clone(), base64: BASE64.encode(plain) })
+}
+
+#[tauri::command]
+fn lan_decrypt_base64(cipher_base64: String, key_hex: String, file_name: String) -> Result<LocalFileResult, String> {
+    let cipher = BASE64.decode(cipher_base64.as_bytes()).map_err(|_| "bad data".to_string())?;
+    let key_vec = hex::decode(key_hex).map_err(|_| "bad key".to_string())?;
+    if key_vec.len() != KEY_SIZE { return Err("bad key length".to_string()); }
+    let mut key = [0u8; KEY_SIZE]; key.copy_from_slice(&key_vec);
+    let plain = decrypt_bytes(&cipher, &key)?;
+    let name = sanitize_file_name(&file_name);
+    let mime = simple_mime(&name);
+    Ok(LocalFileResult { file_name: name, file_mime: mime, base64: BASE64.encode(plain) })
+}
+
 #[tauri::command]
 async fn discover_rooms(runtime: tauri::State<'_, LinkRuntime>, timeout_secs: u64) -> Result<Vec<serde_json::Value>, String> {
     let own_code = runtime.room.lock().map(|r| r.room_code.clone()).unwrap_or_default();
@@ -728,13 +763,13 @@ fn start_link_server(device_name: String) -> Result<LinkRuntime, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_opener::init()).plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_iap::init()).plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_iap::init()).plugin(tauri_plugin_os::init()).plugin(tauri_plugin_fs::init())
         .setup(|app| {
             let runtime = start_link_server(local_device_name()).map_err(|e| Box::<dyn std::error::Error>::from(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
             app.manage(runtime);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, save_host_file, share_file_bytes, start_local_hosting, stop_local_hosting])
+        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, save_host_file, remote_decrypt_base64, host_file_base64, lan_decrypt_base64, share_file_bytes, start_local_hosting, stop_local_hosting])
         .run(tauri::generate_context!()).expect("error while running tauri application");
 }
 

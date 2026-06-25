@@ -2,12 +2,14 @@ import { Component, useCallback, useEffect, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode, MouseEvent } from "react";
 import {
   Bookmark,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clipboard,
   Download,
   FileText,
   History,
+  Image as ImageIcon,
   Info,
   Link2,
   Lock,
@@ -26,6 +28,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import { save } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { platform } from "@tauri-apps/plugin-os";
@@ -64,6 +67,18 @@ const APP_NAME = "SideWire";
 function openExternal(url: string) {
   return (e: MouseEvent) => { e.preventDefault(); openUrl(url).catch(() => {}); };
 }
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif|svg)$/i;
+function isImageFile(m: { fileMime?: string; fileName?: string }): boolean {
+  if (m.fileMime && m.fileMime.startsWith("image/")) return true;
+  return !!m.fileName && IMAGE_EXT.test(m.fileName);
+}
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
 const BRAND_PROMPT = "sidewire";
 const THEME_STORAGE_KEY = "sidewire-theme";
 const ROOM_JOINED_KEY = "sidewire-room-joined";
@@ -78,7 +93,14 @@ const RELAY_URL = "wss://sidewire-relay.fly.dev";
 // Windows (Microsoft Store): two separate add-ons (monthly + yearly).
 // macOS/Linux: Remote stays free.
 const REMOTE_PRODUCT_ID = "sidewire_remote_monthly";
-const REMOTE_YEARLY_PRODUCT_ID = "sidewire_remote_yearly";
+// Windows (Microsoft Store): the IAP plugin looks up add-ons by their 12-char
+// Store ID (Partner Center), NOT the product id. Android uses REMOTE_PRODUCT_ID
+// (one subscription holding both the monthly and yearly base plans).
+const WIN_MONTHLY_STORE_ID = "9NS8CXVWHH7X";
+const WIN_YEARLY_STORE_ID = "9P5JH1TM2CPR";
+// Shown instantly on the yearly button so the "% off" badge does not pop in after
+// the store's live prices load; recomputed from the real prices once they arrive.
+const FALLBACK_DISCOUNT_PCT = Math.round((1 - 19.99 / (2.99 * 12)) * 100);
 // User-facing file size limits (see MAX_FILE_SIZE in relay/server.js and
 // DefaultBodyLimit in src-tauri/src/lib.rs).
 const LOCAL_MAX_LABEL = "500 MB";
@@ -138,20 +160,22 @@ function ThemeToggle({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme
   return <button type="button" className="theme-toggle" onClick={onToggleTheme} title="Switch theme"><Icon size={17} /><span>{theme === "dark" ? "Light" : "Dark"}</span></button>;
 }
 
-function MessageTranscript({ messages, onSaveFile, selfName }: { messages: LinkMessage[]; onSaveFile?: (m: LinkMessage) => void; selfName?: string }) {
+function MessageTranscript({ messages, onSaveFile, onPreview, selfName }: { messages: LinkMessage[]; onSaveFile?: (m: LinkMessage) => void; onPreview?: (m: LinkMessage) => void; selfName?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: "smooth" }); }, [messages.length]);
   return <div className="transcript" ref={ref}>
     {messages.map(m => {
       const cls = m.sender === "system" ? "system" : (m.deviceName && selfName && m.deviceName === selfName) ? "mine" : "other";
+      const hasData = !!(m.payload || m.downloadUrl);
+      const canPreview = m.kind === "file" && isImageFile(m) && !!onPreview && hasData;
       return (
       <article className={`message ${cls}`} key={m.id}>
         <div className="message-meta"><span>{m.deviceName || m.sender}</span><time>{formatTime(m.createdAt)}</time></div>
         <p>{m.body}</p>
-        {m.kind === "file" && <div className="file-card">
-          <FileText size={20} />
-          <div><strong>{m.fileName}</strong><span>{formatBytes(m.fileSize)}</span></div>
-          {onSaveFile && (m.payload || m.downloadUrl) && <button type="button" className="file-save-btn" title="Save file" onClick={() => onSaveFile(m)}><Download size={16} /><span>Save</span></button>}
+        {m.kind === "file" && <div className={`file-card${canPreview ? " file-card-clickable" : ""}`} onClick={canPreview ? () => onPreview!(m) : undefined}>
+          {isImageFile(m) ? <ImageIcon size={20} /> : <FileText size={20} />}
+          <div><strong>{m.fileName}</strong><span>{formatBytes(m.fileSize)}{canPreview ? " - tap to view" : ""}</span></div>
+          {onSaveFile && hasData && <button type="button" className="file-save-btn" title="Save file" onClick={e => { e.stopPropagation(); onSaveFile(m); }}><Download size={16} /><span>Save</span></button>}
         </div>}
       </article>
       );
@@ -177,6 +201,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const [joinPassword, setJoinPassword] = useState("");
   const [joinDeviceName, setJoinDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) || "");
   const [scanning, setScanning] = useState(false);
+  const [notice, setNotice] = useState(""); // yellow status text (scanning, looking) - not an error
   const [busy, setBusy] = useState<"" | "creating" | "opening" | "joining">("");
   const [foundRooms, setFoundRooms] = useState<DiscoveredRoom[]>([]);
   const messagesRef = useRef<LinkMessage[]>([]);
@@ -204,6 +229,15 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // App version (from tauri.conf.json) for the info popup and the footer.
   const [appVersion, setAppVersion] = useState("");
   const [showInfo, setShowInfo] = useState(false);
+  const [preview, setPreview] = useState<{ url: string; name: string; mime: string; b64: string } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [toast, setToast] = useState("");
+  const toastTimer = useRef<number | null>(null);
+  function showToast(msg: string) {
+    setToast(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
+  }
   useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
   const remoteRoomReadyRef = useRef(false);
   const relayCodeRef = useRef<string>(""); // remembers the relay room code across mode toggles
@@ -218,12 +252,14 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const [showPaywall, setShowPaywall] = useState(false);
   const [paywallPrice, setPaywallPrice] = useState("");
   const [paywallYearlyPrice, setPaywallYearlyPrice] = useState("");
+  const [yearlyDiscountPct, setYearlyDiscountPct] = useState(0);
   const [paywallBusy, setPaywallBusy] = useState(false);
 
   const refreshEntitlement = useCallback(async () => {
     try {
-      // Android: one subscription covers both plans. Windows: check both add-ons.
-      const ids = isAndroidRef.current ? [REMOTE_PRODUCT_ID] : [REMOTE_PRODUCT_ID, REMOTE_YEARLY_PRODUCT_ID];
+      // Android: one subscription covers both plans (by product id).
+      // Windows: check both add-ons by their Store ID.
+      const ids = isAndroidRef.current ? [REMOTE_PRODUCT_ID] : [WIN_MONTHLY_STORE_ID, WIN_YEARLY_STORE_ID];
       for (const id of ids) {
         const status: any = await getProductStatus(id, "subs");
         if (status?.isOwned) {
@@ -252,8 +288,8 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // Android: both plans are base-plan offers under the one subscription product.
   // Windows: two separate add-on products.
   async function loadRemoteOffers(): Promise<{
-    monthly: { productId: string; offerToken?: string; price: string } | null;
-    yearly: { productId: string; offerToken?: string; price: string } | null;
+    monthly: { productId: string; offerToken?: string; price: string; micros: number } | null;
+    yearly: { productId: string; offerToken?: string; price: string; micros: number } | null;
   }> {
     if (isAndroidRef.current) {
       const r: any = await getProducts([REMOTE_PRODUCT_ID], "subs");
@@ -262,31 +298,38 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       const lastPhase = (o: any) => { const ph = o?.pricingPhases?.pricingPhaseList ?? o?.pricingPhases ?? []; return ph[ph.length - 1] ?? ph[0]; };
       const period = (o: any) => String(lastPhase(o)?.billingPeriod ?? "");
       const price = (o: any) => lastPhase(o)?.formattedPrice ?? "";
+      const micros = (o: any) => Number(lastPhase(o)?.priceAmountMicros ?? 0);
       const yearly = offers.find(o => period(o).includes("Y")) ?? null;
       const monthly = offers.find(o => o !== yearly && period(o).includes("M")) ?? offers.find(o => o !== yearly) ?? null;
       return {
-        monthly: monthly ? { productId: REMOTE_PRODUCT_ID, offerToken: monthly.offerToken, price: price(monthly) } : null,
-        yearly: yearly ? { productId: REMOTE_PRODUCT_ID, offerToken: yearly.offerToken, price: price(yearly) } : null,
+        monthly: monthly ? { productId: REMOTE_PRODUCT_ID, offerToken: monthly.offerToken, price: price(monthly), micros: micros(monthly) } : null,
+        yearly: yearly ? { productId: REMOTE_PRODUCT_ID, offerToken: yearly.offerToken, price: price(yearly), micros: micros(yearly) } : null,
       };
     }
-    // Windows (Microsoft Store): two add-on products.
-    const r: any = await getProducts([REMOTE_PRODUCT_ID, REMOTE_YEARLY_PRODUCT_ID], "subs");
+    // Windows (Microsoft Store): two add-ons, queried by Store ID.
+    const r: any = await getProducts([WIN_MONTHLY_STORE_ID, WIN_YEARLY_STORE_ID], "subs");
     const products: any[] = Array.isArray(r) ? r : (r?.products ?? []);
     const byId = (id: string) => products.find(p => (p?.productId ?? p?.id) === id);
     const price = (p: any) => p?.formattedPrice ?? p?.price ?? p?.priceString ?? "";
-    const m = byId(REMOTE_PRODUCT_ID), y = byId(REMOTE_YEARLY_PRODUCT_ID);
+    const micros = (p: any) => Number(p?.priceAmountMicros ?? 0);
+    const m = byId(WIN_MONTHLY_STORE_ID), y = byId(WIN_YEARLY_STORE_ID);
     return {
-      monthly: { productId: REMOTE_PRODUCT_ID, price: m ? price(m) : "" },
-      yearly: { productId: REMOTE_YEARLY_PRODUCT_ID, price: y ? price(y) : "" },
+      monthly: { productId: WIN_MONTHLY_STORE_ID, price: m ? price(m) : "", micros: m ? micros(m) : 0 },
+      yearly: { productId: WIN_YEARLY_STORE_ID, price: y ? price(y) : "", micros: y ? micros(y) : 0 },
     };
   }
 
   async function openPaywall() {
-    setShowPaywall(true); setError(""); setPaywallPrice(""); setPaywallYearlyPrice("");
+    setShowPaywall(true); setError(""); setPaywallPrice(""); setPaywallYearlyPrice(""); setYearlyDiscountPct(FALLBACK_DISCOUNT_PCT);
     try {
       const offers = await loadRemoteOffers();
       setPaywallPrice(offers.monthly?.price || "");
       setPaywallYearlyPrice(offers.yearly?.price || "");
+      const m = offers.monthly?.micros ?? 0, y = offers.yearly?.micros ?? 0;
+      if (m > 0 && y > 0) {
+        const pct = Math.round((1 - y / (m * 12)) * 100);
+        setYearlyDiscountPct(pct > 0 ? pct : 0);
+      }
     } catch {}
   }
 
@@ -403,7 +446,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
         messagesRef.current = mapped; setMessages(mapped);
         setTransportPersist("relay"); setIsHost(false);
         localStorage.setItem(ROOM_JOINED_KEY, "true");
-        setBusy(""); setError(""); setView("chat");
+        setBusy(""); setError(""); setNotice(""); setView("chat");
         break;
       }
       case "message": {
@@ -422,7 +465,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       case "user_left": addLocalMessage(systemMsg(`${msg.deviceName} left`)); break;
       case "room_closed": addLocalMessage(systemMsg("Room closed by host")); break;
       case "error":
-        setBusy("");
+        setBusy(""); setNotice("");
         // Relay rejected an unsubscribed Android host: show the paywall.
         if (msg.message === "subscription_required") {
           remoteRoomReadyRef.current = false; relayCodeRef.current = "";
@@ -565,12 +608,21 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   }
 
   async function scanNetwork() {
-    setScanning(true); setFoundRooms([]); setError("Scanning your Wi-Fi network...");
+    setScanning(true); setFoundRooms([]); setError(""); setNotice("Scanning your Wi-Fi network...");
     try {
-      const rooms = await discoverLan();
+      // A room created moments ago may not answer the first sweep yet, so try
+      // again after a short wait before giving up.
+      let rooms = await discoverLan();
+      if (rooms.length === 0) {
+        setNotice("Still scanning... give the other device a moment.");
+        await new Promise(r => setTimeout(r, 1500));
+        rooms = await discoverLan();
+      }
       setFoundRooms(rooms);
-      setError(rooms.length === 0 ? "No rooms found. Make sure the other device opened a Local room on the same Wi-Fi." : "");
-    } catch (err) { setError(String(err)); }
+      setNotice(rooms.length === 0
+        ? "No rooms found yet. Make sure the other device opened a Local room on the same Wi-Fi, then tap scan again."
+        : "");
+    } catch (err) { setError(String(err)); setNotice(""); }
     setScanning(false);
   }
 
@@ -595,7 +647,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       localStorage.setItem(ROOM_CODE_KEY, code); localStorage.setItem(ROOM_JOINED_KEY, "true");
       setTransportPersist("client"); setIsHost(false);
       setRoomInfo({ roomCode: code, deviceName: "host", devices: [], port, ip });
-      setView("chat"); setError("");
+      setView("chat"); setError(""); setNotice("");
       return true;
     } catch { return false; }
   }
@@ -611,17 +663,17 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
 
     // A password means a remote room - go straight to the relay, no Wi-Fi scan.
     if (pass && !room) {
-      setError("Connecting to the room...");
+      setError(""); setNotice("Connecting to the room...");
       try {
         const res = await invoke<{ authHash: string }>("remote_set_key", { password: pass, roomCode: code });
         connectRelay(RELAY_URL, () => sendRelay("join_room", { roomCode: code, authHash: res.authHash }));
         // busy stays set until handleRelayEvent receives room_joined or error
-      } catch (err) { setError(String(err)); setBusy(""); }
+      } catch (err) { setNotice(""); setError(String(err)); setBusy(""); }
       return;
     }
 
     // No password - it is a local room. Find it on the Wi-Fi.
-    setError(room ? "Connecting..." : "Looking for the room on your Wi-Fi...");
+    setError(""); setNotice(room ? "Connecting..." : "Looking for the room on your Wi-Fi...");
     try {
       // Reuse rooms a prior Scan already found; only re-sweep if needed.
       let target: DiscoveredRoom | null = room || foundRooms.find(r => r.roomCode.toUpperCase() === code) || null;
@@ -630,7 +682,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
         const port = await resolvePort(target.ip, code, target.port);
         if (port > 0 && await joinLocalHost(target.ip, port, code, name)) return;
       }
-      setError("Could not find that room on your Wi-Fi. If it is a remote room, enter its password to join.");
+      setNotice(""); setError("Could not find that room on your Wi-Fi. If it is a remote room, enter its password to join.");
     } finally { setBusy(""); }
   }
 
@@ -691,34 +743,61 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     if (transport !== "relay") await refreshMessages();
   }
 
+  // Decrypt a received file to plaintext bytes (base64) in the webview. Used for
+  // both inline preview and saving through the fs plugin (which can write the
+  // Android content URI that the save dialog returns, where std::fs writes 0 bytes).
+  async function getDecrypted(m: LinkMessage): Promise<{ b64: string; mime: string; name: string }> {
+    if (transport === "relay") {
+      if (!m.payload) throw new Error("no payload");
+      const r = await invoke<{ base64: string; fileName: string; fileMime: string }>("remote_decrypt_base64", { payload: m.payload });
+      return { b64: r.base64, mime: r.fileMime, name: r.fileName };
+    }
+    if (transport === "host") {
+      const fileId = (m.downloadUrl || "").split("/").pop() || "";
+      if (!fileId) throw new Error("no file id");
+      const r = await invoke<{ base64: string; fileName: string; fileMime: string }>("host_file_base64", { fileId });
+      return { b64: r.base64, mime: r.fileMime, name: r.fileName };
+    }
+    // client (LAN): fetch the ciphertext from the host, decrypt it in Rust.
+    if (!m.downloadUrl) throw new Error("no url");
+    const res = await fetch(`http://${hostRef.current}${m.downloadUrl}?token=${encodeURIComponent(tokenRef.current)}`, { cache: "no-store" });
+    if (!res.ok) throw new Error("Could not download file.");
+    const keyHex = res.headers.get("X-Encryption-Key-Hex") || "";
+    const origName = res.headers.get("X-Original-Name") || m.fileName || "file";
+    const buf = new Uint8Array(await res.arrayBuffer());
+    let bin = ""; for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+    const cipherBase64 = btoa(bin);
+    const r = await invoke<{ base64: string; fileMime: string }>("lan_decrypt_base64", { cipherBase64, keyHex, fileName: origName });
+    return { b64: r.base64, mime: r.fileMime, name: origName };
+  }
+
   async function saveFile(m: LinkMessage) {
     try {
-      if (transport === "relay") {
-        if (!m.payload) return;
-        const meta = await invoke<{ fileName: string }>("remote_file_meta", { payload: m.payload });
-        const savePath = await save({ defaultPath: meta.fileName || m.fileName });
-        if (!savePath) return;
-        await invoke("remote_decrypt_file", { payload: m.payload, savePath });
-      } else if (transport === "client") {
-        if (!m.downloadUrl) return;
-        const r = await fetch(`http://${hostRef.current}${m.downloadUrl}?token=${encodeURIComponent(tokenRef.current)}`, { cache: "no-store" });
-        if (!r.ok) { setError("Could not download file."); return; }
-        const keyHex = r.headers.get("X-Encryption-Key-Hex") || "";
-        const origName = r.headers.get("X-Original-Name") || m.fileName || "file";
-        const buf = new Uint8Array(await r.arrayBuffer());
-        let bin = ""; for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
-        const cipherBase64 = btoa(bin);
-        const savePath = await save({ defaultPath: origName });
-        if (!savePath) return;
-        await invoke("save_local_download", { cipherBase64, keyHex, savePath });
-      } else if (transport === "host") {
-        if (!m.downloadUrl) return;
-        const fileId = m.downloadUrl.split("/").pop() || "";
-        if (!fileId) return;
-        const savePath = await save({ defaultPath: m.fileName || "file" });
-        if (!savePath) return;
-        await invoke("save_host_file", { fileId, savePath });
-      }
+      const { b64, name } = await getDecrypted(m);
+      const savePath = await save({ defaultPath: name });
+      if (!savePath) return;
+      await writeFile(savePath, base64ToBytes(b64));
+      showToast(`Saved ${name}`);
+    } catch (err) { setError(String(err)); }
+  }
+
+  async function openPreview(m: LinkMessage) {
+    setPreviewBusy(true); setError("");
+    try {
+      const { b64, mime, name } = await getDecrypted(m);
+      setPreview({ url: `data:${mime || "image/png"};base64,${b64}`, name, mime, b64 });
+    } catch (err) { setError(String(err)); }
+    setPreviewBusy(false);
+  }
+
+  // Save the already-decrypted preview bytes (no re-fetch / re-decrypt).
+  async function savePreview() {
+    if (!preview) return;
+    try {
+      const savePath = await save({ defaultPath: preview.name });
+      if (!savePath) return;
+      await writeFile(savePath, base64ToBytes(preview.b64));
+      showToast(`Saved ${preview.name}`);
     } catch (err) { setError(String(err)); }
   }
 
@@ -789,9 +868,8 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       <div className="lobby-card">
         <div className="brand-title" style={{ justifyContent: "center" }}><Lock size={26} /><span>Remote rooms</span></div>
         <p className="lobby-desc">Local rooms on the same Wi-Fi are always free. Hosting a room over the internet uses our relay - unlock Remote hosting:</p>
-        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("monthly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Monthly - ${paywallPrice || "2.99 EUR/month"}`}</span></button>
-        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("yearly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Yearly - ${paywallYearlyPrice || "19.99 EUR/year"}`}</span></button>
-        <p className="create-hint" style={{ fontSize: 12, opacity: 0.55, marginTop: 2 }}>Yearly saves about 44% versus monthly.</p>
+        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("monthly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Monthly - ${paywallPrice || "€2.99"}/month`}</span></button>
+        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("yearly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Yearly - ${paywallYearlyPrice || "€19.99"}/year`}</span>{yearlyDiscountPct > 0 && <span className="save-badge">{yearlyDiscountPct}% off</span>}</button>
         <button className="lobby-btn" onClick={restorePurchase} disabled={paywallBusy}><span>Restore purchase</span></button>
         <button className="lobby-btn" onClick={() => { setShowPaywall(false); setError(""); }} disabled={paywallBusy}><X size={18} /><span>Not now</span></button>
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
@@ -808,7 +886,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
         <p className="lobby-desc">Send notes and files between your devices - locally over Wi-Fi, or anywhere with end-to-end encryption. No accounts.</p>
         <div className="lobby-buttons">
           <button className="lobby-btn lobby-btn-primary" onClick={createRoom} disabled={busy === "creating"}><Users size={20} /><span>{busy === "creating" ? "Creating..." : "Create Room"}</span></button>
-          <button className="lobby-btn" onClick={() => setView("join")} disabled={!!busy}><Link2 size={20} /><span>Join Room</span></button>
+          <button className="lobby-btn" onClick={() => { setNotice(""); setError(""); setView("join"); }} disabled={!!busy}><Link2 size={20} /><span>Join Room</span></button>
         </div>
         <ThemeToggle theme={theme} onToggleTheme={onToggleTheme} />
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
@@ -867,6 +945,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       <div className="lobby-card">
         <h2 className="create-title"><Link2 size={22} />Join a Room</h2>
         <button className="lobby-btn lobby-btn-primary" onClick={scanNetwork} disabled={scanning || !!busy}><span>{scanning ? "Scanning..." : "Scan for rooms on this network"}</span></button>
+        {notice && <div className="notice-line">{notice}</div>}
         {foundRooms.length > 0 && <div className="found-rooms">
           <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, margin: "8px 0 4px" }}>Found rooms:</p>
           {foundRooms.map(r => (
@@ -886,7 +965,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
           <input value={joinDeviceName} onChange={e => setJoinDeviceName(e.target.value)} placeholder="Tap to type your name, e.g. My Phone" className="lobby-name-input" />
         </div>
         <button className="lobby-btn lobby-btn-primary" onClick={() => joinRoom()} disabled={busy === "joining"}><Link2 size={18} /><span>{busy === "joining" ? "Joining..." : "Join Room"}</span></button>
-        <button className="lobby-btn" onClick={() => setView("lobby")}><X size={18} /><span>Back</span></button>
+        <button className="lobby-btn" onClick={() => { setNotice(""); setError(""); setView("lobby"); }}><X size={18} /><span>Back</span></button>
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
       </div>
     </main>
@@ -903,6 +982,22 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   return (
     <main className={`app-shell theme-${theme}${leftOpen ? " left-open" : ""}${rightOpen ? " right-open" : ""}`} onTouchStart={onChatTouchStart} onTouchEnd={onChatTouchEnd}>
       {(leftOpen || rightOpen) && <div className="drawer-backdrop" onClick={closeDrawers} />}
+      {previewBusy && !preview && <div className="preview-backdrop"><div className="preview-loading">Opening...</div></div>}
+      {preview && (
+        <div className="preview-backdrop" onClick={() => setPreview(null)}>
+          <div className="preview-modal" onClick={e => e.stopPropagation()}>
+            <button type="button" className="preview-close" onClick={() => setPreview(null)} aria-label="Close"><X size={20} /></button>
+            {preview.mime.startsWith("image/")
+              ? <img className="preview-img" src={preview.url} alt={preview.name} />
+              : <div className="preview-noimg"><FileText size={44} /></div>}
+            <div className="preview-name">{preview.name}</div>
+            <div className="preview-actions">
+              <button type="button" className="lobby-btn lobby-btn-primary" onClick={savePreview}><Download size={16} /><span>Save</span></button>
+            </div>
+          </div>
+        </div>
+      )}
+      {toast && <div className="toast"><Check size={16} /><span>{toast}</span></div>}
       <button type="button" className="swipe-hint swipe-hint-left" onClick={() => { setRightOpen(false); setLeftOpen(true); }} aria-label="Open links and help"><ChevronRight size={15} /></button>
       <button type="button" className="swipe-hint swipe-hint-right" onClick={() => { setLeftOpen(false); setRightOpen(true); }} aria-label="Open room and saved conversations"><ChevronLeft size={15} /></button>
       <aside className="terminal-rail" aria-label="Room info">
@@ -948,7 +1043,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
           </div>
         </header>
         <div className="workspace-grid panel-hidden">
-          <MessageTranscript messages={viewingSaved ? viewingSaved.messages : messages} onSaveFile={viewingSaved ? undefined : saveFile} selfName={myDeviceName || "Me"} />
+          <MessageTranscript messages={viewingSaved ? viewingSaved.messages : messages} onSaveFile={viewingSaved ? undefined : saveFile} onPreview={viewingSaved ? undefined : openPreview} selfName={myDeviceName || "Me"} />
         </div>
         <form className="composer" onSubmit={sendMessage}>
           <input ref={fileInputRef} type="file" multiple onChange={onFilesPicked} style={{ display: "none" }} />
