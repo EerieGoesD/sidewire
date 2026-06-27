@@ -79,6 +79,25 @@ function base64ToBytes(b64: string): Uint8Array {
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   return arr;
 }
+
+const MIME_EXT: Record<string, string> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/gif": "gif",
+  "image/webp": "webp", "image/bmp": "bmp", "image/heic": "heic", "image/heif": "heif",
+  "image/svg+xml": "svg", "application/pdf": "pdf", "text/plain": "txt",
+};
+// Keep the saved file's real extension. Without a dialog filter, Windows uses
+// "All Files" and saves with no extension (e.g. "screenshot1" instead of
+// "screenshot1.png"). Derive the extension from the name or the mime and pass a
+// matching filter so the format is preserved.
+function saveTarget(name: string, mime?: string): { defaultPath: string; filters?: { name: string; extensions: string[] }[] } {
+  let fileName = name || "file";
+  let ext = (fileName.match(/\.([a-zA-Z0-9]+)$/)?.[1] || "").toLowerCase();
+  if (!ext && mime && MIME_EXT[mime]) { ext = MIME_EXT[mime]; fileName = `${fileName}.${ext}`; }
+  const filters = ext
+    ? [{ name: `${ext.toUpperCase()} file`, extensions: [ext] }, { name: "All files", extensions: ["*"] }]
+    : undefined;
+  return { defaultPath: fileName, filters };
+}
 const BRAND_PROMPT = "sidewire";
 const THEME_STORAGE_KEY = "sidewire-theme";
 const ROOM_JOINED_KEY = "sidewire-room-joined";
@@ -773,8 +792,8 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
 
   async function saveFile(m: LinkMessage) {
     try {
-      const { b64, name } = await getDecrypted(m);
-      const savePath = await save({ defaultPath: name });
+      const { b64, name, mime } = await getDecrypted(m);
+      const savePath = await save(saveTarget(name, mime));
       if (!savePath) return;
       await writeFile(savePath, base64ToBytes(b64));
       showToast(`Saved ${name}`);
@@ -794,7 +813,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   async function savePreview() {
     if (!preview) return;
     try {
-      const savePath = await save({ defaultPath: preview.name });
+      const savePath = await save(saveTarget(preview.name, preview.mime));
       if (!savePath) return;
       await writeFile(savePath, base64ToBytes(preview.b64));
       showToast(`Saved ${preview.name}`);
