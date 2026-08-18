@@ -1,4 +1,5 @@
 import { createServer } from "http";
+import { readFileSync } from "fs";
 import { WebSocketServer } from "ws";
 
 const PORT = process.env.PORT || 8080;
@@ -10,6 +11,7 @@ const MAX_WS_PAYLOAD = 160 * 1024 * 1024;
 const MAX_FILES_PER_MIN = 10;
 const MAX_CONN_PER_IP = 12;            // concurrent websocket connections per IP
 const MAX_MSGS_PER_MIN = 240;          // messages + files per IP per minute
+const MAX_LIVE_PER_MIN = 1200;         // pass-through updates per IP per minute
 const MAX_MESSAGE_SIZE = 256 * 1024;   // cap a single text message payload (ciphertext)
 // Secret for the /admin endpoints. Set with: fly secrets set ADMIN_SECRET=...
 // If unset, the admin endpoints are disabled entirely (return 404).
@@ -28,6 +30,7 @@ let cachedGoogleToken = null; // { token, expiresAtMs }
 const rooms = new Map();
 const ipFileCounts = new Map();
 const ipMsgCounts = new Map();
+const ipLiveCounts = new Map();
 const ipConnections = new Map();
 const bannedIps = new Set();
 const stats = { totalFiles: 0, totalMessages: 0, totalBytesRelayed: 0, roomsCreated: 0 };
@@ -76,6 +79,14 @@ function checkMsgRate(ip) {
   if (!e || now > e.resetAt) { e = { count: 0, resetAt: now + 60_000 }; ipMsgCounts.set(ip, e); }
   e.count++;
   return e.count <= MAX_MSGS_PER_MIN;
+}
+
+function checkLiveRate(ip) {
+  const now = Date.now();
+  let e = ipLiveCounts.get(ip);
+  if (!e || now > e.resetAt) { e = { count: 0, resetAt: now + 60_000 }; ipLiveCounts.set(ip, e); }
+  e.count++;
+  return e.count <= MAX_LIVE_PER_MIN;
 }
 
 function dropConnections(ip) {
@@ -162,8 +173,18 @@ async function verifyPlayToken(purchaseToken) {
   return active;
 }
 
+// The Fader Widget phone page. Served from here so it has an https address of
+// its own; the pairing code travels in the link fragment and never reaches us.
+const FADER_PAGE = readFileSync(new URL("./fader.html", import.meta.url), "utf8");
+
 const server = createServer((req, res) => {
   const ip = getClientIp({ headers: req.headers, socket: req.socket });
+
+  if (req.url === "/fader" || req.url?.startsWith("/fader?")) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+    res.end(FADER_PAGE);
+    return;
+  }
 
   if (req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -320,6 +341,18 @@ wss.on("connection", (ws, req) => {
         const fm = { type: "file", deviceName, payload: msg.payload, fileSize, createdAt: Date.now() };
         room.messages.push({ sender: "user", deviceName, payload: msg.payload, fileSize, kind: "file", createdAt: Date.now() });
         broadcast(room, ws, fm);
+        return;
+      }
+
+      // Pass-through channel. Forwarded to the room and never kept, for apps
+      // that stream state many times a second and have no use for a backlog.
+      if (type === "live") {
+        const room = rooms.get(roomCode);
+        if (!room) return;
+        if (typeof msg.payload !== "string") return;
+        if (msg.payload.length > MAX_MESSAGE_SIZE) return;
+        if (!checkLiveRate(clientIp)) return;
+        broadcast(room, ws, { type: "live", payload: msg.payload });
         return;
       }
 

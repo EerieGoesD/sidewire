@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="color-scheme" content="dark" />
+    <title>Fader Widget</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        background: #0a0a0c;
+        color: #d4d4d8;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        padding: 14px;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      h1 { font-size: 13px; font-weight: 600; color: #8b8b96; margin-bottom: 12px; }
+      .pair { display: flex; flex-direction: column; gap: 10px; max-width: 320px; }
+      .pair label { font-size: 13px; color: #8b8b96; }
+      .pair input {
+        width: 100%;
+        padding: 12px;
+        font-family: inherit;
+        font-size: 16px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #f4f4f5;
+        background: #1a1a1f;
+        border: 1px solid #333;
+        border-radius: 8px;
+      }
+      .pair input:focus { outline: none; border-color: #818cf8; }
+      .pair button {
+        padding: 12px;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        color: #fff;
+        background: #6366f1;
+        border: none;
+        border-radius: 8px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .row.master .name { color: #f4f4f5; font-weight: 600; }
+      .mute {
+        flex: 0 0 auto;
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #8b8b96;
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+      }
+      .row.muted .mute { color: #f87171; border-color: rgba(248, 113, 113, 0.45); }
+      .col { flex: 1; min-width: 0; }
+      .head { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+      .name { color: #a1a1aa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .value { color: #8b8b96; font-variant-numeric: tabular-nums; }
+      .row.muted .name, .row.muted .value { color: #63636e; }
+      .fader { position: relative; height: 34px; margin-top: 4px; }
+      .meter {
+        position: absolute;
+        left: 0;
+        bottom: 5px;
+        height: 3px;
+        width: 0;
+        border-radius: 2px;
+        background: #34d399;
+        pointer-events: none;
+      }
+      input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 34px;
+        background: transparent;
+      }
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 6px;
+        border-radius: 3px;
+        background: linear-gradient(to right, #818cf8 0 var(--fill, 0%), #26262e var(--fill, 0%) 100%);
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 24px;
+        height: 24px;
+        margin-top: -9px;
+        border-radius: 50%;
+        background: #f4f4f5;
+      }
+      .row.muted input[type="range"]::-webkit-slider-runnable-track { background: #26262e; }
+      .row.muted input[type="range"]::-webkit-slider-thumb { background: #63636e; }
+      .notice { font-size: 13px; color: #63636e; padding: 10px 0; }
+      .notice.bad { color: #f87171; }
+    </style>
+  </head>
+
+  <body>
+    <h1>Fader Widget</h1>
+
+    <div class="pair" id="pair" hidden>
+      <label for="pairCode">Pairing code from the widget on your PC</label>
+      <input id="pairCode" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABC123-XY7K9M" />
+      <button id="pairGo">Connect</button>
+    </div>
+
+    <div id="rows"></div>
+    <div class="notice" id="notice">Connecting...</div>
+
+    <script>
+      const RELAY = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
+
+      const rowsEl = document.getElementById("rows");
+      const noticeEl = document.getElementById("notice");
+      const pairEl = document.getElementById("pair");
+      const rows = new Map();
+      const held = new Map();
+      let order = "";
+      let socket = null;
+      let key = null;
+
+      const SPEAKER =
+        '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5 7 9.5H3v5h4l5 4.5V5z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a8 8 0 0 1 0 11"/></svg>';
+      const MUTED =
+        '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5 7 9.5H3v5h4l5 4.5V5z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>';
+
+      // ── The room password never leaves this page. It makes the key that the
+      // messages are locked with, and a separate hash that lets the relay check
+      // who may join without ever learning the password itself.
+      const bytes = (text) => new TextEncoder().encode(text);
+
+      async function deriveKey(password, code) {
+        const base = await crypto.subtle.importKey("raw", bytes(password), "PBKDF2", false, ["deriveKey"]);
+        return crypto.subtle.deriveKey(
+          { name: "PBKDF2", salt: bytes(code), iterations: 210000, hash: "SHA-256" },
+          base,
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["encrypt", "decrypt"]
+        );
+      }
+
+      async function authHash(password, code) {
+        const joined = new Uint8Array([...bytes(code), 0, ...bytes(password)]);
+        const digest = await crypto.subtle.digest("SHA-256", joined);
+        return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      }
+
+      async function seal(text) {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes(text));
+        const out = new Uint8Array(iv.length + sealed.byteLength);
+        out.set(iv);
+        out.set(new Uint8Array(sealed), iv.length);
+        let binary = "";
+        for (const b of out) binary += String.fromCharCode(b);
+        return btoa(binary);
+      }
+
+      async function unseal(payload) {
+        const raw = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        const plain = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: raw.slice(0, 12) },
+          key,
+          raw.slice(12)
+        );
+        return new TextDecoder().decode(plain);
+      }
+
+      function fail(message) {
+        noticeEl.textContent = message;
+        noticeEl.classList.add("bad");
+        noticeEl.hidden = false;
+      }
+
+      async function send(command) {
+        if (!socket || socket.readyState !== 1 || !key) return;
+        socket.send(JSON.stringify({ type: "live", payload: await seal(JSON.stringify(command)) }));
+      }
+
+      function buildRow(fader) {
+        const row = document.createElement("div");
+        row.className = "row" + (fader.master ? " master" : "");
+
+        const mute = document.createElement("button");
+        mute.className = "mute";
+        mute.innerHTML = SPEAKER;
+
+        const col = document.createElement("div");
+        col.className = "col";
+        const head = document.createElement("div");
+        head.className = "head";
+        const name = document.createElement("div");
+        name.className = "name";
+        const value = document.createElement("div");
+        value.className = "value";
+        head.appendChild(name);
+        head.appendChild(value);
+
+        const wrap = document.createElement("div");
+        wrap.className = "fader";
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.min = "0";
+        slider.max = "100";
+        slider.step = "1";
+        const meter = document.createElement("div");
+        meter.className = "meter";
+        wrap.appendChild(slider);
+        wrap.appendChild(meter);
+
+        col.appendChild(head);
+        col.appendChild(wrap);
+        row.appendChild(mute);
+        row.appendChild(col);
+
+        const entry = { row, mute, name, value, slider, meter, muted: false };
+
+        slider.addEventListener("input", () => {
+          const level = Number(slider.value);
+          value.textContent = level + "%";
+          slider.style.setProperty("--fill", level + "%");
+          held.set(fader.key, Date.now());
+          send({ set: { key: fader.key, volume: level / 100 } });
+        });
+
+        mute.addEventListener("click", () => {
+          entry.muted = !entry.muted;
+          row.classList.toggle("muted", entry.muted);
+          mute.innerHTML = entry.muted ? MUTED : SPEAKER;
+          held.set(fader.key, Date.now());
+          send({ mute: { key: fader.key, muted: entry.muted } });
+        });
+
+        return entry;
+      }
+
+      function render(list) {
+        const keys = list.map((f) => f.key);
+        const signature = keys.join("|");
+
+        if (signature !== order) {
+          for (const [rowKey, entry] of rows) {
+            if (!keys.includes(rowKey)) {
+              entry.row.remove();
+              rows.delete(rowKey);
+              held.delete(rowKey);
+            }
+          }
+          for (const fader of list) {
+            if (!rows.has(fader.key)) rows.set(fader.key, buildRow(fader));
+            rowsEl.appendChild(rows.get(fader.key).row);
+          }
+          order = signature;
+        }
+
+        const now = Date.now();
+        for (const fader of list) {
+          const entry = rows.get(fader.key);
+          if (!entry) continue;
+
+          if (entry.name.textContent !== fader.name) entry.name.textContent = fader.name;
+
+          const recent = held.get(fader.key);
+          if (!recent || now - recent > 900) {
+            const level = Math.round(fader.volume * 100);
+            if (entry.slider.value !== String(level)) entry.slider.value = String(level);
+            entry.slider.style.setProperty("--fill", level + "%");
+            entry.value.textContent = level + "%";
+            if (entry.muted !== fader.muted) {
+              entry.muted = fader.muted;
+              entry.row.classList.toggle("muted", fader.muted);
+              entry.mute.innerHTML = fader.muted ? MUTED : SPEAKER;
+            }
+          }
+
+          entry.meter.style.width = Math.round(Math.min(1, fader.peak) * 100) + "%";
+        }
+
+        noticeEl.classList.remove("bad");
+        if (list.length <= 1) {
+          noticeEl.textContent = "No app is playing sound right now.";
+          noticeEl.hidden = false;
+        } else {
+          noticeEl.hidden = true;
+        }
+      }
+
+      async function connect(pairing) {
+        const [code, password] = pairing.trim().toUpperCase().split("-");
+        if (!code || !password) {
+          fail("That pairing code does not look right.");
+          return;
+        }
+
+        key = await deriveKey(password, code);
+        const hash = await authHash(password, code);
+
+        socket = new WebSocket(RELAY);
+        socket.addEventListener("open", () => {
+          socket.send(JSON.stringify({ type: "join_room", roomCode: code, deviceName: "Phone", authHash: hash }));
+        });
+
+        socket.addEventListener("message", async (event) => {
+          const message = JSON.parse(event.data);
+          if (message.type === "error") {
+            fail(message.message === "Wrong password" ? "That pairing code does not match." : message.message);
+            return;
+          }
+          if (message.type === "room_joined") {
+            pairEl.hidden = true;
+            noticeEl.textContent = "Waiting for the faders...";
+            noticeEl.classList.remove("bad");
+            noticeEl.hidden = false;
+            return;
+          }
+          if (message.type === "room_closed") {
+            fail("The widget on the PC was closed.");
+            return;
+          }
+          if (message.type === "live") {
+            try {
+              const data = JSON.parse(await unseal(message.payload));
+              if (Array.isArray(data.faders)) render(data.faders);
+            } catch {}
+          }
+        });
+
+        socket.addEventListener("close", () => fail("Lost the connection."));
+        socket.addEventListener("error", () => fail("Could not reach the relay."));
+      }
+
+      const fromLink = location.hash.replace(/^#/, "");
+      if (fromLink) {
+        connect(decodeURIComponent(fromLink));
+      } else {
+        pairEl.hidden = false;
+        noticeEl.hidden = true;
+        document.getElementById("pairGo").addEventListener("click", () => {
+          connect(document.getElementById("pairCode").value);
+        });
+      }
+    </script>
+  </body>
+</html>
