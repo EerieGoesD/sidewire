@@ -173,7 +173,7 @@ async function verifyPlayToken(purchaseToken) {
   return active;
 }
 
-// The Fader Widget phone page. Served from here so it has an https address of
+// The Audio Mixer Widget phone page. Served from here so it has an https address of
 // its own; the pairing code travels in the link fragment and never reaches us.
 const FADER_PAGE = readFileSync(new URL("./fader.html", import.meta.url), "utf8");
 
