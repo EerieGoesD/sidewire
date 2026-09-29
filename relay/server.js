@@ -180,7 +180,7 @@ const FADER_PAGE = readFileSync(new URL("./fader.html", import.meta.url), "utf8"
 const server = createServer((req, res) => {
   const ip = getClientIp({ headers: req.headers, socket: req.socket });
 
-  if (req.url === "/fader" || req.url?.startsWith("/fader?")) {
+  if (req.url === "/mixer" || req.url?.startsWith("/mixer?")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     res.end(FADER_PAGE);
     return;
