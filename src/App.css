@@ -1788,6 +1788,26 @@ input:disabled {
 .file-card-clickable { cursor: pointer; }
 .file-card-clickable:hover { border-color: rgba(30, 144, 255, 0.5); }
 
+.image-message { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.msg-image {
+  max-width: 280px;
+  max-height: 320px;
+  border-radius: 10px;
+  object-fit: contain;
+  cursor: pointer;
+  background: #0b0b12;
+  border: 1px solid rgba(30, 144, 255, 0.22);
+}
+.msg-image-loading {
+  width: 180px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+
 .preview-backdrop {
   position: fixed;
   inset: 0;

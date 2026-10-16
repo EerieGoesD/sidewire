@@ -179,23 +179,47 @@ function ThemeToggle({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme
   return <button type="button" className="theme-toggle" onClick={onToggleTheme} title="Switch theme"><Icon size={17} /><span>{theme === "dark" ? "Light" : "Dark"}</span></button>;
 }
 
-function MessageTranscript({ messages, onSaveFile, onPreview, selfName }: { messages: LinkMessage[]; onSaveFile?: (m: LinkMessage) => void; onPreview?: (m: LinkMessage) => void; selfName?: string }) {
+const URL_RE = /(https?:\/\/[^\s]+)/i;
+
+function ImageThumb({ m, load, onClick }: { m: LinkMessage; load: (m: LinkMessage) => Promise<string>; onClick: () => void }) {
+  const [url, setUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    load(m).then(u => { if (alive) setUrl(u); }).catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [m.id]);
+  if (failed) return null;
+  if (!url) return <div className="msg-image msg-image-loading">Loading...</div>;
+  return <img className="msg-image" src={url} alt={m.fileName || "image"} onClick={onClick} />;
+}
+
+function MessageTranscript({ messages, onSaveFile, onPreview, getImageUrl, selfName }: { messages: LinkMessage[]; onSaveFile?: (m: LinkMessage) => void; onPreview?: (m: LinkMessage) => void; getImageUrl?: (m: LinkMessage) => Promise<string>; selfName?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: "smooth" }); }, [messages.length]);
   return <div className="transcript" ref={ref}>
     {messages.map(m => {
       const cls = m.sender === "system" ? "system" : (m.deviceName && selfName && m.deviceName === selfName) ? "mine" : "other";
       const hasData = !!(m.payload || m.downloadUrl);
-      const canPreview = m.kind === "file" && isImageFile(m) && !!onPreview && hasData;
+      const isImg = m.kind === "file" && isImageFile(m);
+      const showThumb = isImg && !!getImageUrl && hasData;
+      const canPreview = isImg && !!onPreview && hasData;
+      const linkUrl = m.kind !== "file" ? (m.body.match(URL_RE)?.[0] || "") : "";
       return (
       <article className={`message ${cls}`} key={m.id}>
         <div className="message-meta"><span>{m.deviceName || m.sender}</span><time>{formatTime(m.createdAt)}</time></div>
         <p>{m.body}</p>
-        {m.kind === "file" && <div className={`file-card${canPreview ? " file-card-clickable" : ""}`} onClick={canPreview ? () => onPreview!(m) : undefined}>
-          {isImageFile(m) ? <ImageIcon size={20} /> : <FileText size={20} />}
-          <div><strong>{m.fileName}</strong><span>{formatBytes(m.fileSize)}{canPreview ? " - tap to view" : ""}</span></div>
-          {onSaveFile && hasData && <button type="button" className="file-save-btn" title="Save file" onClick={e => { e.stopPropagation(); onSaveFile(m); }}><Download size={16} /><span>Save</span></button>}
-        </div>}
+        {linkUrl && <button type="button" className="file-save-btn" title="Open link" onClick={() => openUrl(linkUrl).catch(() => {})}><Link2 size={16} /><span>Open Link</span></button>}
+        {m.kind === "file" && (showThumb
+          ? <div className="image-message">
+              <ImageThumb m={m} load={getImageUrl!} onClick={() => onPreview?.(m)} />
+              {onSaveFile && <button type="button" className="file-save-btn" title="Save file" onClick={e => { e.stopPropagation(); onSaveFile(m); }}><Download size={16} /><span>Save</span></button>}
+            </div>
+          : <div className={`file-card${canPreview ? " file-card-clickable" : ""}`} onClick={canPreview ? () => onPreview!(m) : undefined}>
+              {isImg ? <ImageIcon size={20} /> : <FileText size={20} />}
+              <div><strong>{m.fileName}</strong><span>{formatBytes(m.fileSize)}{canPreview ? " - tap to view" : ""}</span></div>
+              {onSaveFile && hasData && <button type="button" className="file-save-btn" title="Save file" onClick={e => { e.stopPropagation(); onSaveFile(m); }}><Download size={16} /><span>Save</span></button>}
+            </div>)}
       </article>
       );
     })}
@@ -809,6 +833,12 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     setPreviewBusy(false);
   }
 
+  // Decrypt an image message to a data URL for the inline thumbnail.
+  async function loadImageUrl(m: LinkMessage): Promise<string> {
+    const { b64, mime } = await getDecrypted(m);
+    return `data:${mime || "image/png"};base64,${b64}`;
+  }
+
   // Save the already-decrypted preview bytes (no re-fetch / re-decrypt).
   async function savePreview() {
     if (!preview) return;
@@ -1062,7 +1092,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
           </div>
         </header>
         <div className="workspace-grid panel-hidden">
-          <MessageTranscript messages={viewingSaved ? viewingSaved.messages : messages} onSaveFile={viewingSaved ? undefined : saveFile} onPreview={viewingSaved ? undefined : openPreview} selfName={myDeviceName || "Me"} />
+          <MessageTranscript messages={viewingSaved ? viewingSaved.messages : messages} onSaveFile={viewingSaved ? undefined : saveFile} onPreview={viewingSaved ? undefined : openPreview} getImageUrl={viewingSaved ? undefined : loadImageUrl} selfName={myDeviceName || "Me"} />
         </div>
         <form className="composer" onSubmit={sendMessage}>
           <input ref={fileInputRef} type="file" multiple onChange={onFilesPicked} style={{ display: "none" }} />
