@@ -116,6 +116,8 @@ const REMOTE_PRODUCT_ID = "sidewire_remote_monthly";
 // Windows (Microsoft Store): the IAP plugin looks up add-ons by their 12-char
 // Store ID (Partner Center), NOT the product id. Android uses REMOTE_PRODUCT_ID
 // (one subscription holding both the monthly and yearly base plans).
+// Google Play's own page for this subscription (cancel, change plan, payment).
+const PLAY_MANAGE_SUB_URL = `https://play.google.com/store/account/subscriptions?sku=${REMOTE_PRODUCT_ID}&package=com.eeriegoesd.sidewire`;
 const WIN_MONTHLY_STORE_ID = "9NS8CXVWHH7X";
 const WIN_YEARLY_STORE_ID = "9P5JH1TM2CPR";
 // Shown instantly on the yearly button so the "% off" badge does not pop in after
@@ -923,6 +925,10 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       <span className="sep">|</span>
       <a className="link-feature" href="https://support.eeriegoesd.com/suggest-feature/sidewire" onClick={openExternal("https://support.eeriegoesd.com/suggest-feature/sidewire")}>Suggest Feature</a>
       <span className="sep">|</span>
+      {IS_ANDROID && remoteEntitled && <>
+        <a className="link-report" href={PLAY_MANAGE_SUB_URL} onClick={openExternal(PLAY_MANAGE_SUB_URL)}>Manage Subscription</a>
+        <span className="sep">|</span>
+      </>}
       <a className="link-report" href="https://eeriegoesd.com/privacy/sidewire/" onClick={openExternal("https://eeriegoesd.com/privacy/sidewire/")}>Privacy</a>
       <span className="sep">|</span>
       <span className="footer-madeby">Made by <a className="link-eerie" href="https://eeriegoesd.com" onClick={openExternal("https://eeriegoesd.com")}>EERIE</a></span>
@@ -954,8 +960,8 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       <div className="lobby-card">
         <div className="brand-title" style={{ justifyContent: "center" }}><Lock size={26} /><span>Remote rooms</span></div>
         <p className="lobby-desc">Local rooms on the same Wi-Fi are always free. Hosting a room over the internet uses our relay - unlock Remote hosting:</p>
-        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("monthly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Monthly - ${paywallPrice || "€2.99"}/month`}</span></button>
-        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("yearly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : `Yearly - ${paywallYearlyPrice || "€19.99"}/year`}</span>{yearlyDiscountPct > 0 && <span className="save-badge">{yearlyDiscountPct}% off</span>}</button>
+        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("monthly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : paywallPrice ? `Monthly - ${paywallPrice}/month` : "Monthly"}</span></button>
+        <button className="lobby-btn lobby-btn-primary" onClick={() => subscribeRemote("yearly")} disabled={paywallBusy}><Lock size={18} /><span>{paywallBusy ? "Processing..." : paywallYearlyPrice ? `Yearly - ${paywallYearlyPrice}/year` : "Yearly"}</span>{yearlyDiscountPct > 0 && <span className="save-badge">{yearlyDiscountPct}% off</span>}</button>
         <button className="lobby-btn" onClick={restorePurchase} disabled={paywallBusy}><span>Restore purchase</span></button>
         <button className="lobby-btn" onClick={() => { setShowPaywall(false); setError(""); }} disabled={paywallBusy}><X size={18} /><span>Not now</span></button>
         {error && <div className="error-line" style={{ marginTop: 12 }}>{error}</div>}
