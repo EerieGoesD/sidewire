@@ -1,0 +1,23 @@
+name = "sidewire-relay"
+main = "src/index.js"
+compatibility_date = "2026-07-25"
+
+# Secrets (not in this file):
+#   wrangler secret put GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64
+#   wrangler secret put ADMIN_SECRET
+
+[observability]
+enabled = true
+
+# One Durable Object per Remote room, plus one that holds the IP ban list.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[durable_objects.bindings]]
+name = "CONTROL"
+class_name = "Control"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Control"]

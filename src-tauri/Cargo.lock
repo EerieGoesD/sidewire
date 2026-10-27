@@ -992,6 +992,7 @@ dependencies = [
  "bytes",
  "dirs-next",
  "hex",
+ "jni",
  "pbkdf2",
  "rand 0.8.6",
  "serde",

@@ -2650,3 +2650,52 @@ input:disabled {
 .theme-light .rail-conversations-empty {
   color: rgba(21, 25, 34, 0.3);
 }
+
+/* ── Android: 48dp tap areas on controls drawn smaller ── */
+
+html.android .drawer-toggle,
+html.android .icon-button,
+html.android .send-button,
+html.android .theme-toggle,
+html.android .save-button,
+html.android .clear-button,
+html.android .disconnect-button,
+html.android .copy-code-btn,
+html.android .copy-code-sidebar,
+html.android .file-save-btn,
+html.android .rail-conversation-delete {
+  position: relative;
+  overflow: visible;
+}
+
+html.android .drawer-toggle::after,
+html.android .icon-button::after,
+html.android .send-button::after,
+html.android .theme-toggle::after,
+html.android .save-button::after,
+html.android .clear-button::after,
+html.android .disconnect-button::after,
+html.android .copy-code-btn::after,
+html.android .copy-code-sidebar::after,
+html.android .file-save-btn::after,
+html.android .info-fab::after,
+html.android .info-modal-close::after,
+html.android .preview-close::after,
+html.android .swipe-hint::after {
+  content: "";
+  position: absolute;
+  top: min(0px, calc(50% - 24px));
+  bottom: min(0px, calc(50% - 24px));
+  left: min(0px, calc(50% - 24px));
+  right: min(0px, calc(50% - 24px));
+}
+
+/* Delete has no undo and the rows sit 2px apart: keep its layer inside its own row. */
+html.android .rail-conversation-delete::after {
+  content: "";
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: -13px;
+  right: -8px;
+}

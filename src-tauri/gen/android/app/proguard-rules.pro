@@ -19,3 +19,8 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Called from Rust by name through JNI; keep it from R8.
+-keepclassmembers class com.eeriegoesd.sidewire.MainActivity {
+    public void setAppTheme(boolean);
+}

@@ -707,6 +707,27 @@ fn list_saved_conversations(runtime: tauri::State<'_, LinkRuntime>) -> Result<Ve
 #[tauri::command]
 fn delete_conversation(runtime: tauri::State<'_, LinkRuntime>, id: String) -> Result<(), String> { delete_conversation_file(&runtime.conversations_dir, &id) }
 
+// Android: recolour the system bars to the app's theme (MainActivity.setAppTheme).
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn set_window_theme(webview: tauri::Webview, theme: String) -> Result<(), String> {
+    let light = theme == "light";
+    webview
+        .with_webview(move |platform| {
+            platform.jni_handle().exec(move |env, activity, _webview| {
+                let arg = jni::objects::JValue::Bool(light as jni::sys::jboolean);
+                if env.call_method(activity, "setAppTheme", "(Z)V", &[arg]).is_err() {
+                    let _ = env.exception_clear();
+                }
+            });
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn set_window_theme(_theme: String) -> Result<(), String> { Ok(()) }
+
 #[tauri::command]
 fn cleanup_old_files_now(runtime: tauri::State<'_, LinkRuntime>) -> Result<String, String> {
     let incoming_dir = runtime.state.lock().map(|state| state.incoming_dir.clone()).map_err(|_| "state unavailable".to_string())?;
@@ -769,7 +790,7 @@ pub fn run() {
             app.manage(runtime);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, save_host_file, remote_decrypt_base64, host_file_base64, lan_decrypt_base64, share_file_bytes, start_local_hosting, stop_local_hosting])
+        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, save_host_file, remote_decrypt_base64, host_file_base64, lan_decrypt_base64, share_file_bytes, start_local_hosting, stop_local_hosting, set_window_theme])
         .run(tauri::generate_context!()).expect("error while running tauri application");
 }
 

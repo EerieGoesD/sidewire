@@ -39,3 +39,6 @@ bytes = "1"
 tauri-plugin-notification = "2"
 tauri-plugin-iap = "0.9"
 tauri-plugin-os = "2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

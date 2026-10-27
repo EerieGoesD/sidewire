@@ -26,7 +26,8 @@ import {
   X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { getVersion } from "@tauri-apps/api/app";
+import type { PluginListener } from "@tauri-apps/api/core";
+import { getVersion, onBackButtonPress } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -106,7 +107,7 @@ const ROOM_CODE_KEY = "sidewire-room-code";
 const ROOM_HOST_KEY = "sidewire-room-host";
 const ROOM_TOKEN_KEY = "sidewire-room-token";
 const ROOM_MODE_KEY = "sidewire-room-mode";
-const RELAY_URL = "wss://sidewire-relay.fly.dev";
+const RELAY_URL = "wss://sidewire-relay.eeriegoesd.workers.dev"; // relay-worker/ (Cloudflare)
 // Hosting a Remote room requires a subscription on the gated stores.
 // Android (Play): one subscription product with a monthly AND a yearly base plan.
 // Windows (Microsoft Store): two separate add-ons (monthly + yearly).
@@ -120,10 +121,14 @@ const WIN_YEARLY_STORE_ID = "9P5JH1TM2CPR";
 // Shown instantly on the yearly button so the "% off" badge does not pop in after
 // the store's live prices load; recomputed from the real prices once they arrive.
 const FALLBACK_DISCOUNT_PCT = Math.round((1 - 19.99 / (2.99 * 12)) * 100);
-// User-facing file size limits (see MAX_FILE_SIZE in relay/server.js and
-// DefaultBodyLimit in src-tauri/src/lib.rs).
+// User-facing file size limits (see the 32 MiB message limit in
+// relay-worker/src/index.js and DefaultBodyLimit in src-tauri/src/lib.rs).
 const LOCAL_MAX_LABEL = "500 MB";
-const REMOTE_MAX_LABEL = "100 MB";
+const REMOTE_MAX_LABEL = "24 MB";
+const REMOTE_MAX_BYTES = 24 * 1000 * 1000;
+
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+document.documentElement.classList.toggle("android", IS_ANDROID);
 
 function readTheme(): ThemeMode { return localStorage.getItem(THEME_STORAGE_KEY) === "light" ? "light" : "dark"; }
 function readTransport(): Transport {
@@ -169,7 +174,10 @@ async function notifyNewMessage(msg: LinkMessage) {
 
 function App() {
   const [theme, setTheme] = useState<ThemeMode>(readTheme);
-  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    if (IS_ANDROID) invoke("set_window_theme", { theme }).catch(() => {});
+  }, [theme]);
   function toggleTheme() { setTheme(c => { const n = c === "dark" ? "light" : "dark"; localStorage.setItem(THEME_STORAGE_KEY, n); return n; }); }
   return <ErrorBoundary><RoomApp theme={theme} onToggleTheme={toggleTheme} /></ErrorBoundary>;
 }
@@ -251,6 +259,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
   const [viewingSaved, setViewingSaved] = useState<SavedConversation | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const relayQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [isHost, setIsHost] = useState(true);
 
   const transportRef = useRef<Transport>(transport);
@@ -415,6 +424,29 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   }
   function closeDrawers() { setLeftOpen(false); setRightOpen(false); }
 
+  // Android Back closes what is open, topmost first. The listener is only
+  // registered while something is open, so Back with nothing open leaves the app.
+  const backOpen = showPaywall || !!preview || showInfo || leftOpen || rightOpen || !!viewingSaved || view === "join" || view === "create";
+  const closeTopmostRef = useRef<() => void>(() => {});
+  closeTopmostRef.current = () => {
+    if (showPaywall) { if (!paywallBusy) { setShowPaywall(false); setError(""); } }
+    else if (preview) setPreview(null);
+    else if (showInfo) setShowInfo(false);
+    else if (leftOpen || rightOpen) closeDrawers();
+    else if (viewingSaved) handleBackToLive();
+    else if (view === "join") { setNotice(""); setError(""); setView("lobby"); }
+    else if (view === "create") { if (busy !== "opening") cancelCreate(); }
+  };
+  useEffect(() => {
+    if (!IS_ANDROID || !backOpen) return;
+    let listener: PluginListener | null = null;
+    let alive = true;
+    onBackButtonPress(() => closeTopmostRef.current())
+      .then(l => { if (alive) listener = l; else l.unregister().catch(() => {}); })
+      .catch(() => {});
+    return () => { alive = false; listener?.unregister().catch(() => {}); };
+  }, [backOpen]);
+
   function setTransportPersist(t: Transport) { transportRef.current = t; setTransport(t); localStorage.setItem(ROOM_MODE_KEY, t); }
   function systemMsg(body: string) { return { sender: "system", deviceName: "system", kind: "text", body, createdAt: Date.now() }; }
   function addLocalMessage(m: Partial<LinkMessage> & { body: string }) {
@@ -533,7 +565,11 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
     // Send the create/join only once the socket is actually open. The relay
     // machine can cold-start (Fly.io), so a fixed timer would race and hang.
     ws.onopen = () => { onReady?.(); };
-    ws.onmessage = (event) => { try { handleRelayEvent(JSON.parse(event.data)); } catch {} };
+    // Handled one at a time, in arrival order: a joiner's history arrives as a run of events.
+    ws.onmessage = (event) => {
+      let msg: any; try { msg = JSON.parse(event.data); } catch { return; }
+      relayQueueRef.current = relayQueueRef.current.then(() => handleRelayEvent(msg)).catch(() => {});
+    };
     ws.onerror = () => { setError("Could not connect to relay server."); remoteRoomReadyRef.current = false; setBusy(""); };
     ws.onclose = () => {};
   }
@@ -569,7 +605,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
           remoteRoomReadyRef.current = true;
           // Relay verifies Android tokens; Windows is gated client-side, so it
           // sends no token and the relay treats it like any non-android client.
-          connectRelay(RELAY_URL, () => sendRelay("create_room", { client: platformRef.current || "desktop", purchaseToken: isAndroidRef.current ? purchaseTokenRef.current : undefined }));
+          connectRelay(`${RELAY_URL}/?create=1`, () => sendRelay("create_room", { client: platformRef.current || "desktop", purchaseToken: isAndroidRef.current ? purchaseTokenRef.current : undefined }));
         }
       }
     } else {
@@ -709,7 +745,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       setError(""); setNotice("Connecting to the room...");
       try {
         const res = await invoke<{ authHash: string }>("remote_set_key", { password: pass, roomCode: code });
-        connectRelay(RELAY_URL, () => sendRelay("join_room", { roomCode: code, authHash: res.authHash }));
+        connectRelay(`${RELAY_URL}/?room=${encodeURIComponent(code)}`, () => sendRelay("join_room", { roomCode: code, authHash: res.authHash }));
         // busy stays set until handleRelayEvent receives room_joined or error
       } catch (err) { setNotice(""); setError(String(err)); setBusy(""); }
       return;
@@ -770,6 +806,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       const mime = file.type || "application/octet-stream";
       try {
         if (transport === "relay") {
+          if (file.size > REMOTE_MAX_BYTES) { setError(`${name} is over ${REMOTE_MAX_LABEL}, the limit for remote rooms.`); continue; }
           const b64 = await fileToBase64(file);
           const res = await invoke<{ payload: string; fileSize: number }>("remote_encrypt_bytes", { fileName: name, mime, dataBase64: b64 });
           sendRelay("file", { payload: res.payload, fileSize: res.fileSize });
@@ -880,17 +917,17 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // Footer links, reused in the chat footer and the info popup.
   const footerLinkEls = (
     <>
-      <a className="link-report" href="https://github.com/EerieGoesD/sidewire/issues/new?template=bug-report.md" onClick={openExternal("https://github.com/EerieGoesD/sidewire/issues/new?template=bug-report.md")}>Report Issue</a>
+      <a className="link-report" href="https://support.eeriegoesd.com/report-issue/sidewire" onClick={openExternal("https://support.eeriegoesd.com/report-issue/sidewire")}>Report Issue</a>
       <span className="sep">|</span>
-      <a className="link-feedback" href="https://github.com/EerieGoesD/sidewire/discussions" onClick={openExternal("https://github.com/EerieGoesD/sidewire/discussions")}>Feedback</a>
+      <a className="link-feedback" href="https://support.eeriegoesd.com/community/sidewire" onClick={openExternal("https://support.eeriegoesd.com/community/sidewire")}>Discussions</a>
       <span className="sep">|</span>
-      <a className="link-feature" href="https://github.com/EerieGoesD/sidewire/issues/new?template=feature-request.md" onClick={openExternal("https://github.com/EerieGoesD/sidewire/issues/new?template=feature-request.md")}>Suggest Feature</a>
-      <span className="sep">|</span>
-      <a className="link-coffee" href="https://buymeacoffee.com/eeriegoesd" onClick={openExternal("https://buymeacoffee.com/eeriegoesd")}>Support This Project</a>
+      <a className="link-feature" href="https://support.eeriegoesd.com/suggest-feature/sidewire" onClick={openExternal("https://support.eeriegoesd.com/suggest-feature/sidewire")}>Suggest Feature</a>
       <span className="sep">|</span>
       <a className="link-report" href="https://eeriegoesd.com/privacy/sidewire/" onClick={openExternal("https://eeriegoesd.com/privacy/sidewire/")}>Privacy</a>
       <span className="sep">|</span>
-      <span className="footer-madeby">Made by <a className="link-eerie" href="https://eeriegoesd.com/" onClick={openExternal("https://eeriegoesd.com/")}>EERIE</a></span>
+      <span className="footer-madeby">Made by <a className="link-eerie" href="https://eeriegoesd.com" onClick={openExternal("https://eeriegoesd.com")}>EERIE</a></span>
+      <span className="sep">|</span>
+      <a className="link-coffee" href="https://buymeacoffee.com/eeriegoesd" onClick={openExternal("https://buymeacoffee.com/eeriegoesd")}>Support This Project</a>
     </>
   );
 
