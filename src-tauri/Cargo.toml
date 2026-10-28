@@ -42,3 +42,4 @@ tauri-plugin-os = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+ureq = "3"          # the free trial's call to the EERIE Worker (licensing.rs)

@@ -23,6 +23,8 @@ use std::{
 };
 use tauri::Manager;
 use tokio::fs;
+
+mod licensing;
 use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -429,8 +431,24 @@ fn get_room_info(runtime: tauri::State<'_, LinkRuntime>) -> RoomInfo {
 #[serde(rename_all = "camelCase")]
 struct RemoteKeyResult { auth_hash: String }
 
+// The app's own files folder on Android, where the license cache lives.
+#[cfg(target_os = "android")]
+fn data_dir(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app.path().app_local_data_dir().expect("could not resolve app data dir").join("files");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
+// Every command that hosts, joins, sends or saves is refused once an Android
+// trial has ended with nothing bought (licensing.rs). Reading and saving what
+// was received stays open.
+async fn gate(app: &tauri::AppHandle) -> Result<(), String> {
+    if licensing::has_access(app).await { Ok(()) } else { Err(licensing::TRIAL_ENDED.to_string()) }
+}
+
 #[tauri::command]
-fn remote_set_key(runtime: tauri::State<'_, LinkRuntime>, password: String, room_code: String) -> Result<RemoteKeyResult, String> {
+async fn remote_set_key(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, password: String, room_code: String) -> Result<RemoteKeyResult, String> {
+    gate(&app).await?;
     if password.is_empty() { return Err("password is required".to_string()); }
     let key = derive_remote_key(&password, &room_code);
     *runtime.remote_key.lock().map_err(|_| "state unavailable".to_string())? = Some(key);
@@ -446,7 +464,7 @@ fn remote_clear_key(runtime: tauri::State<'_, LinkRuntime>) -> Result<(), String
 // Begin/stop announcing this device's local room over the network. Called when
 // the user opens or leaves a local room, so we never broadcast unprompted.
 #[tauri::command]
-fn start_local_hosting(runtime: tauri::State<'_, LinkRuntime>) { runtime.hosting.store(true, Ordering::Relaxed); }
+async fn start_local_hosting(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>) -> Result<(), String> { gate(&app).await?; runtime.hosting.store(true, Ordering::Relaxed); Ok(()) }
 #[tauri::command]
 fn stop_local_hosting(runtime: tauri::State<'_, LinkRuntime>) { runtime.hosting.store(false, Ordering::Relaxed); }
 
@@ -456,7 +474,8 @@ fn current_remote_key(runtime: &LinkRuntime) -> Result<[u8; KEY_SIZE], String> {
 }
 
 #[tauri::command]
-fn remote_encrypt_text(runtime: tauri::State<'_, LinkRuntime>, text: String) -> Result<String, String> {
+async fn remote_encrypt_text(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, text: String) -> Result<String, String> {
+    gate(&app).await?;
     let key = current_remote_key(&runtime)?;
     Ok(BASE64.encode(encrypt_bytes(text.as_bytes(), &key)?))
 }
@@ -474,7 +493,8 @@ fn remote_decrypt_text(runtime: tauri::State<'_, LinkRuntime>, payload: String) 
 struct RemoteFileResult { payload: String, file_size: u64 }
 
 #[tauri::command]
-fn remote_encrypt_file(runtime: tauri::State<'_, LinkRuntime>, path: String) -> Result<RemoteFileResult, String> {
+async fn remote_encrypt_file(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, path: String) -> Result<RemoteFileResult, String> {
+    gate(&app).await?;
     let key = current_remote_key(&runtime)?;
     let path = PathBuf::from(path);
     let metadata = std::fs::metadata(&path).map_err(|e| format!("cannot read file: {}", e))?;
@@ -491,7 +511,8 @@ fn remote_encrypt_file(runtime: tauri::State<'_, LinkRuntime>, path: String) -> 
 // Same as remote_encrypt_file but from bytes read in the webview - works on
 // Android where the file picker returns a content:// URI that std::fs cannot read.
 #[tauri::command]
-fn remote_encrypt_bytes(runtime: tauri::State<'_, LinkRuntime>, file_name: String, mime: String, data_base64: String) -> Result<RemoteFileResult, String> {
+async fn remote_encrypt_bytes(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, file_name: String, mime: String, data_base64: String) -> Result<RemoteFileResult, String> {
+    gate(&app).await?;
     let key = current_remote_key(&runtime)?;
     let bytes = BASE64.decode(data_base64.as_bytes()).map_err(|_| "bad data".to_string())?;
     let file_name = sanitize_file_name(&file_name);
@@ -648,7 +669,8 @@ fn list_messages(runtime: tauri::State<'_, LinkRuntime>) -> Result<Vec<LinkMessa
 }
 
 #[tauri::command]
-fn send_text(runtime: tauri::State<'_, LinkRuntime>, text: String, device_name: String) -> Result<LinkMessage, String> {
+async fn send_text(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, text: String, device_name: String) -> Result<LinkMessage, String> {
+    gate(&app).await?;
     let text = text.trim().to_string();
     if text.is_empty() { return Err("message is empty".to_string()); }
     let mut state = runtime.state.lock().map_err(|_| "state unavailable".to_string())?;
@@ -656,7 +678,8 @@ fn send_text(runtime: tauri::State<'_, LinkRuntime>, text: String, device_name: 
 }
 
 #[tauri::command]
-fn share_file(runtime: tauri::State<'_, LinkRuntime>, path: String, device_name: String) -> Result<LinkMessage, String> {
+async fn share_file(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, path: String, device_name: String) -> Result<LinkMessage, String> {
+    gate(&app).await?;
     let path = PathBuf::from(path);
     let metadata = std::fs::metadata(&path).map_err(|e| format!("cannot read file: {}", e))?;
     if !metadata.is_file() { return Err("selected path is not a file".to_string()); }
@@ -675,7 +698,8 @@ fn share_file(runtime: tauri::State<'_, LinkRuntime>, path: String, device_name:
 // Share a file from bytes read in the webview (works on Android, unlike share_file
 // which needs a real filesystem path).
 #[tauri::command]
-fn share_file_bytes(runtime: tauri::State<'_, LinkRuntime>, file_name: String, mime: String, data_base64: String, device_name: String) -> Result<LinkMessage, String> {
+async fn share_file_bytes(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, file_name: String, mime: String, data_base64: String, device_name: String) -> Result<LinkMessage, String> {
+    gate(&app).await?;
     let bytes = BASE64.decode(data_base64.as_bytes()).map_err(|_| "bad data".to_string())?;
     let file_name = sanitize_file_name(&file_name);
     let mime = if mime.trim().is_empty() { simple_mime(&file_name) } else { mime };
@@ -695,7 +719,8 @@ fn clear_messages(runtime: tauri::State<'_, LinkRuntime>) -> Result<Vec<LinkMess
 }
 
 #[tauri::command]
-fn save_conversation(runtime: tauri::State<'_, LinkRuntime>, label: String) -> Result<SavedConversation, String> {
+async fn save_conversation(app: tauri::AppHandle, runtime: tauri::State<'_, LinkRuntime>, label: String) -> Result<SavedConversation, String> {
+    gate(&app).await?;
     let messages = runtime.state.lock().map(|state| state.messages.clone()).map_err(|_| "state unavailable".to_string())?;
     save_conversation_file(&runtime.conversations_dir, &label, &messages)
 }
@@ -790,7 +815,7 @@ pub fn run() {
             app.manage(runtime);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, save_host_file, remote_decrypt_base64, host_file_base64, lan_decrypt_base64, share_file_bytes, start_local_hosting, stop_local_hosting, set_window_theme])
+        .invoke_handler(tauri::generate_handler![get_room_info, discover_rooms, list_messages, send_text, share_file, clear_messages, save_conversation, load_conversation, list_saved_conversations, delete_conversation, cleanup_old_files_now, remote_set_key, remote_clear_key, remote_encrypt_text, remote_decrypt_text, remote_encrypt_file, remote_encrypt_bytes, remote_file_meta, remote_decrypt_file, read_file_base64, save_local_download, save_host_file, remote_decrypt_base64, host_file_base64, lan_decrypt_base64, share_file_bytes, start_local_hosting, stop_local_hosting, set_window_theme, licensing::iap_status, licensing::iap_price, licensing::iap_start_trial, licensing::iap_buy, licensing::iap_restore])
         .run(tauri::generate_context!()).expect("error while running tauri application");
 }
 

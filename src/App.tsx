@@ -34,6 +34,8 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { platform } from "@tauri-apps/plugin-os";
 import { getProducts, getProductStatus, purchase, acknowledgePurchase } from "@choochmeque/tauri-plugin-iap-api";
+import { LicenseOverlay, useLicense } from "./License";
+import type { License } from "./License";
 import "./App.css";
 
 type LinkMessage = {
@@ -181,7 +183,8 @@ function App() {
     if (IS_ANDROID) invoke("set_window_theme", { theme }).catch(() => {});
   }, [theme]);
   function toggleTheme() { setTheme(c => { const n = c === "dark" ? "light" : "dark"; localStorage.setItem(THEME_STORAGE_KEY, n); return n; }); }
-  return <ErrorBoundary><RoomApp theme={theme} onToggleTheme={toggleTheme} /></ErrorBoundary>;
+  const lic = useLicense();
+  return <ErrorBoundary><RoomApp theme={theme} onToggleTheme={toggleTheme} lic={lic} /><LicenseOverlay lic={lic} /></ErrorBoundary>;
 }
 
 function ThemeToggle({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: () => void }) {
@@ -236,7 +239,7 @@ function MessageTranscript({ messages, onSaveFile, onPreview, getImageUrl, selfN
   </div>;
 }
 
-function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: () => void }) {
+function RoomApp({ theme, onToggleTheme, lic }: { theme: ThemeMode; onToggleTheme: () => void; lic: License }) {
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [messages, setMessages] = useState<LinkMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -398,7 +401,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
       const token = result?.purchaseToken;
       if (token) { purchaseTokenRef.current = token; try { await acknowledgePurchase(token); } catch {} }
       const active = await refreshEntitlement();
-      if (active || token) { setRemoteEntitled(true); setShowPaywall(false); }
+      if (active || token) { setRemoteEntitled(true); setShowPaywall(false); lic.refresh(); } // the subscription unlocks the trial too
       else setError("Purchase was not completed.");
     } catch (err) { setError(String(err)); }
     setPaywallBusy(false);
@@ -407,7 +410,7 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   async function restorePurchase() {
     setPaywallBusy(true); setError("");
     const active = await refreshEntitlement();
-    if (active) setShowPaywall(false); else setError("No active subscription found for this Google account.");
+    if (active) { setShowPaywall(false); lic.refresh(); } else setError("No active subscription found for this Google account.");
     setPaywallBusy(false);
   }
 
@@ -428,10 +431,13 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
 
   // Android Back closes what is open, topmost first. The listener is only
   // registered while something is open, so Back with nothing open leaves the app.
-  const backOpen = showPaywall || !!preview || showInfo || leftOpen || rightOpen || !!viewingSaved || view === "join" || view === "create";
+  // The trial's start screen and paywall have no way out, so Back leaves the app there.
+  const licBlocking = lic.card === "start" || lic.card === "paywall";
+  const backOpen = !licBlocking && (lic.card === "offer" || showPaywall || !!preview || showInfo || leftOpen || rightOpen || !!viewingSaved || view === "join" || view === "create");
   const closeTopmostRef = useRef<() => void>(() => {});
   closeTopmostRef.current = () => {
-    if (showPaywall) { if (!paywallBusy) { setShowPaywall(false); setError(""); } }
+    if (lic.card === "offer") lic.closeOffer();
+    else if (showPaywall) { if (!paywallBusy) { setShowPaywall(false); setError(""); } }
     else if (preview) setPreview(null);
     else if (showInfo) setShowInfo(false);
     else if (leftOpen || rightOpen) closeDrawers();
@@ -919,6 +925,11 @@ function RoomApp({ theme, onToggleTheme }: { theme: ThemeMode; onToggleTheme: ()
   // Footer links, reused in the chat footer and the info popup.
   const footerLinkEls = (
     <>
+      {/* Android, during the trial: opens the buy page (it has Restore Purchases too). */}
+      {lic.canBuy && <>
+        <a className="link-buy" href="#" onClick={e => { e.preventDefault(); setShowInfo(false); closeDrawers(); lic.openOffer(); }}>Buy SideWire</a>
+        <span className="sep">|</span>
+      </>}
       <a className="link-report" href="https://support.eeriegoesd.com/report-issue/sidewire" onClick={openExternal("https://support.eeriegoesd.com/report-issue/sidewire")}>Report Issue</a>
       <span className="sep">|</span>
       <a className="link-feedback" href="https://support.eeriegoesd.com/community/sidewire" onClick={openExternal("https://support.eeriegoesd.com/community/sidewire")}>Discussions</a>

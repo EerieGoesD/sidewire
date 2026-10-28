@@ -1,7 +1,7 @@
 {
   "name": "eerie-link",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.14",
   "description": "Chat and file transfer between your own devices - locally over Wi-Fi or remotely with end-to-end encryption.",
   "type": "module",
   "scripts": {

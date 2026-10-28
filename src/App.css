@@ -2699,3 +2699,374 @@ html.android .rail-conversation-delete::after {
   left: -13px;
   right: -8px;
 }
+
+/* ── Android free trial: the purchase page (start screen, ended trial, offer) ── */
+/* Full screen, as in any well-made phone app (android_user-experience.txt, THE
+   PURCHASE SCREENS). The page scrolls between a cross (the offer only) and the
+   button pinned at the bottom. */
+
+.footer-links a.link-buy {
+  color: #6db3ff;
+  font-weight: 600;
+}
+
+.lic-overlay {
+  --lic-bg: #050508;
+  --lic-elevated: #0e0e16;
+  --lic-text: #f0f0f0;
+  --lic-muted: rgba(240, 240, 240, 0.62);
+  --lic-accent: #1e90ff;
+  --lic-accent-light: #6db3ff;
+  --lic-accent-soft: rgba(30, 144, 255, 0.14);
+  --lic-accent-line: rgba(30, 144, 255, 0.45);
+  --lic-border: rgba(255, 255, 255, 0.08);
+  --lic-track: rgba(255, 255, 255, 0.24);
+  --lic-danger: #ff6b8a;
+  --lic-hover: rgba(255, 255, 255, 0.08);
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  color: var(--lic-text);
+  background: radial-gradient(120% 55% at 50% 0%, var(--lic-accent-soft), transparent 70%), var(--lic-bg);
+  animation: licfade 0.2s ease;
+}
+
+html[data-theme="light"] .lic-overlay {
+  --lic-bg: #f7f8fb;
+  --lic-elevated: #ffffff;
+  --lic-text: #151922;
+  --lic-muted: rgba(21, 25, 34, 0.62);
+  --lic-accent: #135da8;
+  --lic-accent-light: #135da8;
+  --lic-accent-soft: rgba(19, 93, 168, 0.1);
+  --lic-accent-line: rgba(19, 93, 168, 0.35);
+  --lic-border: rgba(21, 25, 34, 0.08);
+  --lic-track: rgba(21, 25, 34, 0.22);
+  --lic-danger: #c52669;
+  --lic-hover: rgba(21, 25, 34, 0.06);
+}
+
+@keyframes licfade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.lic-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.lic-inner {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 0 24px 16px;
+  text-align: center;
+}
+
+/* Holds the cross on the offer. The pages with no way out get a short gap
+   instead, so the start screen fits a phone without scrolling. */
+.lic-bar {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  margin: 0 -12px;
+}
+
+.lic-overlay.has-close .lic-bar {
+  height: 48px;
+}
+
+.lic-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  color: var(--lic-muted);
+  background: transparent;
+  border: none;
+  border-radius: 24px;
+  cursor: pointer;
+}
+
+.lic-close:active {
+  background: var(--lic-hover);
+}
+
+/* The app's mark as an app icon: the paper plane on a rounded square. */
+.lic-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 88px;
+  height: 88px;
+  margin: 0 auto 20px;
+  color: #fff;
+  background: var(--lic-accent);
+  border-radius: 26px;
+  box-shadow: 0 10px 30px var(--lic-accent-line);
+}
+
+/* Balanced, so a two-line title never leaves one word alone on the second line. */
+.lic-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--lic-text);
+  text-wrap: balance;
+}
+
+.lic-text {
+  margin: 10px 0 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--lic-muted);
+  text-wrap: balance;
+}
+
+/* What the app gives: one rounded list, a tick in a soft disc on each row. */
+.lic-benefits {
+  margin: 26px 0 0;
+  padding: 4px 16px;
+  list-style: none;
+  text-align: left;
+  background: var(--lic-elevated);
+  border-radius: 16px;
+}
+
+.lic-benefits li {
+  position: relative;
+  padding: 11px 0 11px 36px;
+  font-size: 15px;
+  line-height: 1.35;
+  color: var(--lic-text);
+}
+
+.lic-benefits li + li {
+  box-shadow: inset 0 1px 0 var(--lic-border);
+}
+
+.lic-benefits li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  margin-top: -12px;
+  border-radius: 50%;
+  background: var(--lic-accent-soft);
+}
+
+.lic-benefits li::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  width: 5px;
+  height: 10px;
+  margin-top: -7px;
+  border: solid var(--lic-accent-light);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* The start screen: today, the last day, after that. Dots joined by a line, the
+   first one filled. */
+.lic-timeline {
+  margin: 26px 0 0;
+  padding: 0 4px;
+  list-style: none;
+  text-align: left;
+}
+
+.lic-timeline li {
+  position: relative;
+  padding: 0 0 18px 34px;
+}
+
+.lic-timeline li:last-child {
+  padding-bottom: 0;
+}
+
+.lic-timeline li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--lic-track);
+  border-radius: 50%;
+  background: var(--lic-bg);
+  box-sizing: border-box;
+}
+
+.lic-timeline li.now::before {
+  background: var(--lic-accent);
+  border-color: var(--lic-accent);
+}
+
+.lic-timeline li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 21px;
+  bottom: 1px;
+  width: 2px;
+  background: var(--lic-track);
+}
+
+.lic-timeline strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--lic-text);
+}
+
+.lic-timeline span {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--lic-muted);
+}
+
+/* The ended trial and the offer: the one price as a plan, chosen. */
+.lic-price {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 16px 18px;
+  text-align: left;
+  background: var(--lic-accent-soft);
+  border: 2px solid var(--lic-accent);
+  border-radius: 16px;
+}
+
+.lic-plan-words {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.lic-plan-name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--lic-accent-light);
+}
+
+.lic-plan-note {
+  font-size: 14px;
+  color: var(--lic-text);
+}
+
+.lic-price strong {
+  flex: 0 0 auto;
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--lic-text);
+}
+
+/* Pinned at the bottom. The message line sits above the button inside it, so
+   a message that runs to two lines grows the bar upward and the button stays
+   where it is. */
+.lic-foot {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 4px 24px 8px;
+  text-align: center;
+}
+
+.lic-msg {
+  min-height: 20px;
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--lic-danger);
+}
+
+.lic-msg.note {
+  color: var(--lic-muted);
+}
+
+.lic-main {
+  width: 100%;
+  height: 52px;
+  padding: 0 20px;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #fff;
+  background: var(--lic-accent);
+  border: none;
+  border-radius: 26px;
+  box-shadow: 0 8px 22px var(--lic-accent-line);
+  cursor: pointer;
+}
+
+.lic-main:hover,
+.lic-main:active {
+  filter: brightness(1.1);
+}
+
+.lic-fine {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--lic-muted);
+}
+
+.lic-link {
+  height: 48px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lic-muted);
+  background: none;
+  border: none;
+  border-radius: 24px;
+  cursor: pointer;
+}
+
+.lic-link:hover,
+.lic-link:active {
+  color: var(--lic-text);
+}
+
+.lic-main:disabled,
+.lic-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Shorter phones (360 x 800): tighter gaps, so the start screen still fits
+   without scrolling. */
+@media (max-height: 820px) {
+  .lic-overlay:not(.has-close) .lic-bar { height: 8px; }
+  .lic-hero { margin-bottom: 16px; }
+  .lic-benefits,
+  .lic-timeline { margin-top: 20px; }
+}
+
+html[data-theme="light"] .lic-toast {
+  background: #ffffff;
+  color: #1a2230;
+  border-color: rgba(19, 93, 168, 0.4);
+}
